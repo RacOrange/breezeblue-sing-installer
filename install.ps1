@@ -4,7 +4,8 @@
   [string]$Root = (Join-Path $env:USERPROFILE 'whale-cover'),
   [string]$WhaleGirl = '',
   [string]$OnlyStep = '',
-  [string]$BreezeKey = ''
+  [string]$BreezeKey = '',
+  [switch]$UseInstalledVoice
 )
 
 $ErrorActionPreference = 'Continue'
@@ -301,7 +302,7 @@ $steps = @(
       if (-not (Test-Path $py)) { & $uv venv $venv --python 3.11 }
       $probe = & $py -c "import uiautomation,sounddevice,soundfile;print('ok')" 2>$null
       if ($probe -ne 'ok') {
-        & $uv pip install --python $py 'uiautomation==2.0.29' 'sounddevice==0.5.6' 'soundfile==0.14.0' 'numpy'
+        & $uv pip install --python $py 'uiautomation==2.0.29' 'sounddevice==0.5.6' 'soundfile==0.14.0' 'numpy' 'soundcard'
         if ($LASTEXITCODE -ne 0) { throw '语音依赖安装失败' }
       }
       Write-Info ('语音依赖就绪：' + $py)
@@ -392,10 +393,23 @@ $steps = @(
       $py = Join-Path $Root 'engine\venv\Scripts\python.exe'
       $script = Join-Path $PSScriptRoot 'payload\seedvc\tts_ref.py'
       $ffmpeg = Join-Path $Root 'tools\ffmpeg\ffmpeg.exe'
-      $extra = @()
-      if ($BreezeKey) { $extra = @('--breeze-key', $BreezeKey) }
-      & $py $script --runtime-root $Root --whale-girl $wg --ffmpeg $ffmpeg @extra
-      if ($LASTEXITCODE -ne 0) { throw '参考音生成失败' }
+      $done = $false
+      if ($UseInstalledVoice) {
+        $voicePy = Join-Path $Root 'voice\venv\Scripts\python.exe'
+        $capture = Join-Path $PSScriptRoot 'payload\seedvc\capture_ref.py'
+        if ((Test-Path $voicePy) -and (Test-Path $capture)) {
+          Write-Info '尝试复用鲸鲸现有语音生成参考音（需要鲸鲸/微信在运行，文件传输助手会收到测试语音）'
+          & $voicePy $capture --runtime-root $Root --whale-girl $wg
+          if ($LASTEXITCODE -eq 0) { $done = $true; Write-Info '已用鲸鲸现有语音生成参考音' }
+          else { Write-Host '复用鲸鲸语音失败，回退 Windows 本地 TTS' -ForegroundColor Yellow }
+        }
+      }
+      if (-not $done) {
+        $extra = @()
+        if ($BreezeKey) { $extra = @('--breeze-key', $BreezeKey) }
+        & $py $script --runtime-root $Root --whale-girl $wg --ffmpeg $ffmpeg @extra
+        if ($LASTEXITCODE -ne 0) { throw '参考音生成失败' }
+      }
     } },
   @{ Id = 'songs'; Name = '默认测试歌曲'; Action = {
       $src = Join-Path $PSScriptRoot 'payload\songs'
@@ -435,7 +449,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.2' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.3' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
@@ -456,7 +470,7 @@ foreach ($step in $steps) {
     }
     continue
   }
-  if (Test-Done $state $step.Id) { Write-Info '已完成，跳过'; continue }
+  if ((Test-Done $state $step.Id) -and -not ($step.Id -eq 'reference' -and $UseInstalledVoice)) { Write-Info '已完成，跳过'; continue }
   try {
     & $step.Action
     if ($step.Id -eq 'env') { }
