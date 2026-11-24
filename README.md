@@ -98,7 +98,38 @@
 5. 打开新插件的「设置」，确认路径是本机实际路径（如 `D:\whale-cover\...`）。
 6. 如果鲸鲸内核在装插件前就已启动，**重启一次内核**。
 
-## 6. 第一次点歌
+## 5.5 插件设置 JSON 怎么填
+
+插件卡片的「设置」是一个 JSON 输入框。**只装在本机默认目录时，留 `{}` 也能用**；但私聊点歌默认不接管，建议直接填下面这份（把 `你的用户名` 换成自己的 Windows 用户名）：
+
+```json
+{
+  "coverCli": "C:\\Users\\你的用户名\\whale-cover\\tools\\cover.mjs",
+  "python": "C:\\Users\\你的用户名\\whale-cover\\engine\\venv\\Scripts\\python.exe",
+  "ffmpeg": "C:\\Users\\你的用户名\\whale-cover\\tools\\ffmpeg",
+  "dataDir": "C:\\Users\\你的用户名\\whale-cover\\data",
+  "voicePython": "C:\\Users\\你的用户名\\whale-cover\\voice\\venv\\Scripts\\python.exe",
+  "voiceSender": "C:\\Users\\你的用户名\\whale-cover\\voice\\send_cover.py",
+  "neteaseCookies": "C:\\Users\\你的用户名\\whale-cover\\cookies.txt",
+  "engine": "seedvc",
+  "maxSeconds": 30,
+  "onlyGroup": false,
+  "autoRender": true,
+  "proactiveEnabled": true,
+  "proactiveIdleMinutes": 120,
+  "proactiveDailyMax": 2,
+  "proactiveQuietStart": "22:30",
+  "proactiveQuietEnd": "09:00",
+  "proactiveCooldownMinutes": 360,
+  "allowDownload": true
+}
+```
+
+- 路径必须用**双反斜杠** `\\` 或正斜杠 `/`；
+- `onlyGroup: false` 表示私聊也接管点歌；
+- 保存后发 `点歌帮助` 验证；
+- 安装器写入的运行时在哪个盘，就把路径换成那个盘（例如 `D:\\whale-cover`）。
+
 
 1. 私聊机器人，发送：
    ```
@@ -198,9 +229,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -OnlyStep reference -Bree
 | 窗口一闪而过 | 用最新安装包；右键 `install.cmd` 管理员运行；还不行就看 `installer.log` 或截图错误 |
 | 提示找不到鲸鲸 | 手动输入路径，如 `D:\WhaleGirl`（下面要有 `data\config.json`） |
 | 下载慢/中断 | 开代理后重跑 `install.cmd`，会续传 |
-| 点歌没反应 | 确认插件已启用、JS 插件总闸开启、内核重启过、旧插件已停用 |
+| 点歌没反应 | 确认插件已启用、JS 插件总闸开启、内核重启过、旧插件已停用；私聊点歌需要设置里 `onlyGroup: false` |
 | 语音没声音/环境音 | 检查第 4 节：输出 `CABLE Input`、输入 `CABLE Output` |
 | 语音发送失败 | 微信必须在**最前面**；不要最小化或切到别的窗口 |
+| 冒烟测试报“无法将 node 项识别为…” | 系统没装 Node 或不在 PATH；新版安装器会改用鲸鲸自带 `runtime\node.exe`，不影响使用，也可以装 Node.js LTS |
 | CUDA 报错 | 更新 NVIDIA 驱动；6GB 显存成品建议 30 秒，不要超 |
 | 参考音不像 | 用第 8 节方案 B/C/D 换参考音 |
 

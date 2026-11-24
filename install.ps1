@@ -470,14 +470,27 @@ $steps = @(
       if (-not (Test-Path $py)) { throw 'engine venv 缺失' }
       if (-not (Test-Path $sender)) { throw 'send_cover.py 缺失' }
       $env:WHALE_COVER_DATA_DIR = (Join-Path $Root 'data')
-      & node $cli list --json | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw 'cover.mjs 自检失败' }
+      $node = (Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+      if (-not $node) {
+        $wgNode = Find-WhaleGirl
+        if ($wgNode) {
+          $bundled = Join-Path $wgNode 'runtime\node.exe'
+          if (Test-Path -LiteralPath $bundled) { $node = $bundled }
+        }
+      }
+      if (-not $node) {
+        Write-Host 'WARNING: 系统 PATH 里没有 node，也没找到鲸鲸 runtime\node.exe；跳过 cover.mjs 自检。' -ForegroundColor Yellow
+        Write-Host '        鲸鲸内核会使用自带 Node 运行插件，不影响使用；如需自检可安装 Node.js LTS。' -ForegroundColor Yellow
+      } else {
+        & $node $cli list --json | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'cover.mjs 自检失败' }
+      }
       $cuda = & $py -c "import torch;print(torch.cuda.is_available())" 2>$null
       Write-Info ('冒烟通过；CUDA=' + $cuda)
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.10' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.11' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
