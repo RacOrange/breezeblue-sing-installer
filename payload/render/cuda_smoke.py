@@ -6,6 +6,9 @@ import sys
 def main():
     try:
         import torch
+        import torchaudio
+        if torch.__version__.split('+')[0] != torchaudio.__version__.split('+')[0]:
+            raise RuntimeError('TorchAudio does not match PyTorch')
     except Exception as error:
         print(f'CUDA_DEPENDENCIES_INVALID: {type(error).__name__}', file=sys.stderr)
         return 1
