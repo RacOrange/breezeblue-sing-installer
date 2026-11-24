@@ -1,8 +1,8 @@
 # Breezeblue 翻唱运行时安装器
 
-安装器 1.0.14 包含插件 1.0.1。已有运行时可执行 install.cmd -OnlyStep plugin -ForceSteps plugin 覆盖插件、CLI 和发送器，保留原设置与模型；随后在插件市场重新确认完整权限。升级会备份新旧插件安装文件。本版不附带测试曲，把有权使用的音频放入 data/songs 即可。
+安装器 1.0.17 候选包含插件 1.0.4。已有运行时可执行 install.cmd -OnlyStep plugin -ForceSteps plugin 覆盖插件、CLI、语音发送器、音源准备和整首渲染脚本，保留原设置与模型；随后在插件市场重新确认完整权限。升级会备份新旧插件安装文件。本版不附带测试曲，把有权使用的音频放入 data/songs 即可。
 
-给**原版鲸鲸 4.1.2+** 安装翻唱功能：点歌后自动找音源、切 30 秒副歌、用 seed-vc 换成指定音色，再发成微信语音。
+给**原版鲸鲸 4.1.2+** 安装翻唱功能：普通点歌用 seed-vc 渲染整首，在人声停顿附近切分为多条微信语音。
 
 > 最新安装包：<../../releases/latest>
 
@@ -102,7 +102,7 @@
 
 ## 5.5 插件设置 JSON 怎么填
 
-插件卡片的「设置」是一个 JSON 输入框。**只装在本机默认目录时，留 `{}` 也能用**；但私聊点歌默认不接管，建议直接填下面这份（把 `你的用户名` 换成自己的 Windows 用户名）：
+插件卡片的「设置」是一个 JSON 输入框。**只装在本机默认目录时，留 `{}` 也能用**；私聊点歌默认开启，需要变更时建议直接填下面这份（把 `你的用户名` 换成自己的 Windows 用户名）：
 
 ```json
 {
@@ -117,13 +117,13 @@
   "maxSeconds": 30,
   "onlyGroup": false,
   "autoRender": true,
-  "proactiveEnabled": true,
+  "proactiveEnabled": false,
   "proactiveIdleMinutes": 120,
   "proactiveDailyMax": 2,
   "proactiveQuietStart": "22:30",
   "proactiveQuietEnd": "09:00",
   "proactiveCooldownMinutes": 360,
-  "allowDownload": true
+  "proactiveAllowDownload": false, "proactiveDownloadCandidates": []
 }
 ```
 
@@ -138,7 +138,7 @@
    点歌 加入的歌名
    ```
 2. 应该立刻收到：`是《see you again》对吧，我先找原曲～`
-3. 首次渲染约 8–15 分钟。发送时请确认微信前台、绑定账号及语音输入，并查看是否出现新语音条。
+3. 整首渲染耗时随歌曲长度、模型和显卡而变化。发送时请确认微信前台、绑定账号及语音输入，并查看是否出现新语音条。
 4. 发送语音时**微信要保持在最前面**；窗口被切走会失败并提示，不会发错人。
 
 ---
@@ -174,55 +174,26 @@
 - 部分版权曲（例如某些原版）即使有会员也没有 API 下载地址；这种只能把音频放进 `data\songs` 当本地歌曲。
 - cookie 会过期，失效后重新导出覆盖即可。
 
-## 8. 可选：参考音（决定“像不像”）
+## 8. 首次参考音设置
 
-参考音决定翻唱像谁。安装器默认用 **Windows 本地 TTS** 自动生成 6 段参考音，装完即可用，但音色和鲸鲸语音不完全一样。
+新安装默认进入方案 B，复用鲸鲸已经设置好的语音。鲸鲸和微信应处于运行状态，绑定账号、语音开关和 VB-CABLE 都要就绪。安装器说明测试语音会进文件传输助手，并等用户明确确认。无人值守安装会把参考音留作待配置。
 
-### 方案 A：默认（零配置）
+就绪后可执行 `install.cmd -OnlyStep reference -UseInstalledVoice`。方案 B 失败时保留旧文件并提示原因，不回退到 Windows TTS。已经可用的鲸鲸参考音或自行导入的 WAV 会继续保留。想自行导入时，把参考音及对应清单放入 `ref/profiles`。用 Breeze API 的用户可显式选 C。
 
-安装器已自动完成，`ref\profiles\` 下有 `voice_*.wav`。直接点歌即可。
-
-### 方案 B：复用鲸鲸已有语音（不需要 API Key，实验）
-
-前提：鲸鲸在运行、微信已登录、语音发送已启用、CABLE 已设置。
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -OnlyStep reference -UseInstalledVoice
-```
-
-它会：
-
-1. 让鲸鲸给文件传输助手发一条短语音，把会话切过去；
-2. 再发一条约 30 秒 TTS；
-3. 同时录 `CABLE Output`，生成参考音。
-
-文件传输助手会收到测试语音，介意可手动删除。微信会话被切换时会失败，失败自动回退 Windows TTS。
-
-### 方案 C：用自己的 Breeze API Key（音色最接近）
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -OnlyStep reference -BreezeKey "你的 Key"
-```
-
-### 方案 D：导入自己的参考音
-
-1. 准备 6 个 wav（日常/开心/温柔/认真/难过/生气），每个 10–30 秒干净人声；
-2. 命名 `voice_daily.wav`、`voice_happy.wav`、`voice_gentle.wav`、`voice_serious.wav`、`voice_sad.wav`、`voice_angry.wav`；
-3. 放进 `ref\profiles\`，保留或重新生成 `profiles.json`；
-4. 重新点歌。
+正在播放其他电脑声音时，先暂停其它音源再录参考音。当前参考音的合成与录音仍需在实际微信及音频设备上验收。
 
 ## 9. 可选：主动唱歌
 
-插件设置里可调：
+启用前停用旧的 breeze-proactive。新版只投递给已绑定并且能唯一核验的主人私聊。插件设置里可调：
 
 | 设置 | 作用 | 默认 |
 | --- | --- | --- |
-| `proactiveEnabled` | 是否主动唱歌 | true |
+| `proactiveEnabled` | 是否主动唱歌 | false |
 | `proactiveIdleMinutes` | 微信空闲多少分钟后触发 | 120 |
 | `proactiveDailyMax` | 每天最多几首 | 2 |
 | `proactiveQuietStart` / `proactiveQuietEnd` | 静默时段 | 22:30–09:00 |
 | `proactiveCooldownMinutes` | 两次之间至少隔多久 | 360 |
-| `downloadCandidates` | 本地唱完后从网上找的候选歌 | 晴天/后来/小幸运 |
+| proactiveAllowDownload / proactiveDownloadCandidates | 可选下载开关和歌名数组 | false / 空列表 |
 
 ## 10. 常见问题
 
@@ -236,7 +207,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -OnlyStep reference -Bree
 | 语音发送失败 | 微信必须在**最前面**；不要最小化或切到别的窗口 |
 | 冒烟测试报“无法将 node 项识别为…” | 系统没装 Node 或不在 PATH；新版安装器会改用鲸鲸自带 `runtime\node.exe`，不影响使用，也可以装 Node.js LTS |
 | CUDA 报错 | 更新 NVIDIA 驱动；6GB 显存成品建议 30 秒，不要超 |
-| 参考音不像 | 用第 8 节方案 B/C/D 换参考音 |
+| 参考音不像 | 按第 8 节重新设置参考音 |
 
 ## 11. 升级 / 卸载
 
@@ -300,3 +271,23 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -OnlyStep reference -Bree
 ```powershell
 Get-FileHash .\Breezeblue-Sing-Installer-*.zip -Algorithm SHA256
 ```
+
+
+## 整首翻唱候选
+
+普通点歌保留整首成品，根据分离后的人声低谷在每条最多约 56 秒的范围内分段。按顺序发送，上一条状态不确定则停止。闲时主动唱歌仍使用短段，优先选本地未唱的歌，并读取旧主动插件歌名记录用于去重。已有 30 秒成品不会自动延长，需重新从原曲点歌。
+
+整首分段、历史去重、暂停及重放防重通过合成测试。实际 Seed-VC 整曲输出、方案 B 录音、微信逐条送达均要在目标机器专项验收。代发唱歌也已进入离线候选，真实群聊和私聊收件仍待授权验证。
+
+
+## 跨会话代发唱歌
+
+在插件设置中显式打开 relaySingEnabled，并把目标会话的准确微信 ID 加入 relaySingWhitelist。名单可以混合群和私聊。宿主已有代发白名单时，两个名单都必须通过。身份按宿主绑定的账号 ID 核验。目标需要在当前账号的联系人缓存里能唯一定位。
+
+绑定主人在私聊里可说「去「测试群」唱《歌名》」或「把《歌名》唱给爸爸听」。预览会显示目标与歌名，只有同一主人在同一私聊中输入提示的「唱歌确认 六位码」，并且未超过十分钟，才会下单和渲染。普通的「确认」仍属于宿主原有功能。每次分段投递前重新核对联系人和白名单，目标无法核验或语音条无法确认时停发。当前发送器以新控件标识、右侧位置和时长作为送达证据；目标微信版本和布局需要真实验证。
+
+合并候选依赖 Api 4 宿主授予的子进程能力。Windows 上存在额外限制的宿主无法启动音频进程，遇到该限制应使用兼容的原版客户端。
+
+### RTX 50 系列 CUDA 兼容性
+
+安装器读取 NVIDIA 显卡算力。Blackwell 选用 PyTorch 与 TorchAudio 2.7.1 的官方 cu128 Windows 轮子，其他已支持显卡可沿用通过算子验证的环境。安装时会实际执行 GPU 张量计算。旧安装如果报 PyTorch 与显卡不兼容，运行 install.cmd -OnlyStep deps，然后跑完整安装以同步本地渲染与插件文件。第一次安装仍默认进入方案 B，已有可用参考音继续保留。

@@ -57,7 +57,7 @@ function Read-State {
   if (Test-Path $script:StateFile) {
     try { return Get-Content $script:StateFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { }
   }
-  return [pscustomobject]@{ version = 1; steps = @{}; startedAt = (Get-Date).ToString('o') }
+  return [pscustomobject]@{ version = 1; steps = [pscustomobject]@{}; startedAt = (Get-Date).ToString('o') }
 }
 function Save-State($State) {
   New-Item -ItemType Directory -Force -Path $Root | Out-Null
@@ -71,6 +71,57 @@ function Mark-Done($State, [string]$Id, [string]$Detail = '') {
   if ($State.steps.PSObject.Properties.Name -contains $Id) { $State.steps.$Id = $entry }
   else { $State.steps | Add-Member -NotePropertyName $Id -NotePropertyValue $entry }
   Save-State $State
+}
+
+function Test-CudaExecution([string]$Python) {
+  if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { return $false }
+  $script = Join-Path $PSScriptRoot 'payload\render\cuda_smoke.py'
+  & $Python $script 2>$null | Out-Null
+  return $LASTEXITCODE -eq 0
+}
+
+function Get-TorchBuild {
+  $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $smi) {
+    $fallback = Join-Path $env:WINDIR 'System32\nvidia-smi.exe'
+    if (Test-Path -LiteralPath $fallback -PathType Leaf) { $smi = Get-Item -LiteralPath $fallback }
+  }
+  if ($smi) {
+    $command = if ($smi.Source) { $smi.Source } else { $smi.FullName }
+    $caps = @(& $command --query-gpu=compute_cap --format=csv,noheader,nounits 2>$null)
+    if ($LASTEXITCODE -eq 0 -and @($caps | Where-Object { $_ -match '^\s*(?:1[2-9]|[2-9]\d)\.\d+\s*$' }).Count) {
+      return @{ Version = '2.7.1'; Cuda = 'cu128' }
+    }
+    if ($LASTEXITCODE -eq 0 -and @($caps | Where-Object { $_ -match '^\s*\d+\.\d+\s*$' }).Count) {
+      return @{ Version = '2.4.1'; Cuda = 'cu121' }
+    }
+  }
+  throw '无法读取 NVIDIA GPU 算力。请更新 NVIDIA 驱动，并确认 nvidia-smi 可用后重试。'
+}
+
+function Test-ReferenceReady {
+  $manifest = Join-Path $Root 'ref\profiles.json'
+  if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return $false }
+  try {
+    $profiles = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($profiles.mode -eq 'windows-tts') { return $false }
+    $defaultName = [string]$profiles.default
+    if (-not $defaultName) { $defaultName = 'daily' }
+    $entry = $profiles.profiles.PSObject.Properties[$defaultName]
+    if (-not $entry -or $entry.Value.file -notmatch '^profiles[/\\][^/\\:]+[.]wav$') { return $false }
+    $wav = Get-Item -LiteralPath (Join-Path (Join-Path $Root 'ref') $entry.Value.file) -ErrorAction Stop
+    if ($wav.PSIsContainer -or $wav.Length -le 44) { return $false }
+    $stream = [IO.File]::OpenRead($wav.FullName)
+    try {
+      $header = [byte[]]::new(12)
+      if ($stream.Read($header, 0, $header.Length) -ne $header.Length) { return $false }
+      $ascii = [Text.Encoding]::ASCII
+      return ($ascii.GetString($header, 0, 4) -in @('RIFF', 'RF64', 'RIFX') -and
+        $ascii.GetString($header, 8, 4) -eq 'WAVE')
+    } finally { $stream.Dispose() }
+  } catch {
+    return $false
+  }
 }
 
 function Test-Admin {
@@ -271,15 +322,22 @@ $steps = @(
       $py = Join-Path $Root 'engine\venv\Scripts\python.exe'
       if (-not (Test-Path $py)) { throw '缺少 Python，请先完成 uv 步骤' }
       $probe = & $py -c "import torch,torchaudio,demucs,librosa,soundfile,transformers,requests,Crypto,huggingface_hub;print('ok')" 2>$null
-      if ($probe -eq 'ok') {
-        $cuda = & $py -c "import torch;print(torch.cuda.is_available())" 2>$null
-        Write-Info ('依赖已满足，跳过；CUDA=' + $cuda)
+      if ($probe -eq 'ok' -and (Test-CudaExecution $py)) {
+        Write-Info '依赖已满足，CUDA 算子执行通过'
         return
       }
       $uv = Join-Path $Root 'tools\uv\uv.exe'
-      Write-Info '安装 torch cu121（约 2.4GB，可能较久）'
-      & $uv pip install --python $py 'torch==2.4.1+cu121' 'torchaudio==2.4.1+cu121' --index-url https://download.pytorch.org/whl/cu121
-      if ($LASTEXITCODE -ne 0) { throw 'torch 安装失败' }
+      if (-not (Test-CudaExecution $py)) {
+        $build = Get-TorchBuild
+        $pin = "$($build.Version)+$($build.Cuda)"
+        Write-Info ("安装 PyTorch $pin（数 GB，可能较久）")
+        & $uv pip install --python $py "torch==$pin" "torchaudio==$pin" --index-url "https://download.pytorch.org/whl/$($build.Cuda)"
+        if ($LASTEXITCODE -ne 0) { throw 'torch 和 torchaudio 安装失败' }
+        $cudaProbe = Join-Path $PSScriptRoot 'payload\render\cuda_smoke.py'
+        & $py $cudaProbe
+        if ($LASTEXITCODE -ne 0) { throw 'PyTorch 已安装，但 CUDA 算子执行失败。请检查 NVIDIA 驱动与显卡兼容性。' }
+      }
+      if ($probe -eq 'ok') { return }
       Write-Info '安装其余依赖'
       & $uv pip install --python $py 'demucs==4.1.0' 'librosa==0.10.2' 'soundfile==0.12.1' 'numpy==1.26.4' 'transformers==4.46.3' 'huggingface_hub==0.36.2' 'requests' 'pycryptodome' 'safetensors' 'scipy==1.13.1' 'tqdm' 'einops' 'psutil' 'onnxruntime' 'descript-audio-codec' 'descript-audiotools' 'julius' 'torch-stoi' 'munch==4.0.0' 'hydra-core==1.3.2' 'pyyaml' 'python-dotenv' 'pydub' 'accelerate'
       if ($LASTEXITCODE -ne 0) { throw 'Python 依赖安装失败' }
@@ -398,7 +456,10 @@ $steps = @(
         @{ Target = $grantPath; Backup = 'breezeblue-sing.flow-grant.json'; Bytes = $utf8.GetBytes(($grant | ConvertTo-Json -Depth 16 -Compress)) },
         @{ Target = (Join-Path $plugins 'breezeblue-sing.zip'); Backup = 'breezeblue-sing.zip' },
         @{ Target = (Join-Path $Root 'voice\send_cover.py'); Backup = 'runtime-send_cover.py'; Source = (Join-Path $PSScriptRoot 'payload\voice\send_cover.py') },
-        @{ Target = (Join-Path $Root 'tools\cover.mjs'); Backup = 'runtime-cover.mjs'; Source = (Join-Path $PSScriptRoot 'payload\tools\cover.mjs') }
+        @{ Target = (Join-Path $Root 'tools\cover.mjs'); Backup = 'runtime-cover.mjs'; Source = (Join-Path $PSScriptRoot 'payload\tools\cover.mjs') },
+        @{ Target = (Join-Path $Root 'whale-plugin\breeze-prep.mjs'); Backup = 'runtime-breeze-prep.mjs'; Source = (Join-Path $PSScriptRoot 'payload\whale-plugin\breeze-prep.mjs') },
+        @{ Target = (Join-Path $Root 'render\render_cover.py'); Backup = 'runtime-render_cover.py'; Source = (Join-Path $PSScriptRoot 'payload\render\render_cover.py') },
+        @{ Target = (Join-Path $Root 'render\cuda_smoke.py'); Backup = 'runtime-cuda_smoke.py'; Source = (Join-Path $PSScriptRoot 'payload\render\cuda_smoke.py') }
       )
       New-Item -ItemType Directory -Path $backup -Force | Out-Null
       foreach ($name in @('breeze-sing', 'breezeblue-sing')) {
@@ -455,29 +516,52 @@ $steps = @(
       }
       Write-Info ('插件已覆盖，设置已保留；请在插件市场重新授权启用新版。备份：' + $backup)
     } },
-  @{ Id = 'reference'; Name = '生成参考音'; Action = {
+  @{ Id = 'reference'; Name = '方案 B：复用鲸鲸语音'; Action = {
+      $script:ReferenceDeferred = $false
+      if (-not $UseInstalledVoice -and -not $BreezeKey -and
+        -not ($ForceSteps -contains 'reference') -and (Test-ReferenceReady)) {
+        Write-Info '已有可用参考音，继续保留'
+        return
+      }
       $wg = Find-WhaleGirl
       if (-not $wg) { throw '未找到鲸鲸安装目录' }
-      $py = Join-Path $Root 'engine\venv\Scripts\python.exe'
-      $script = Join-Path $PSScriptRoot 'payload\seedvc\tts_ref.py'
-      $ffmpeg = Join-Path $Root 'tools\ffmpeg\ffmpeg.exe'
-      $done = $false
-      if ($UseInstalledVoice) {
-        $voicePy = Join-Path $Root 'voice\venv\Scripts\python.exe'
-        $capture = Join-Path $PSScriptRoot 'payload\seedvc\capture_ref.py'
-        if ((Test-Path $voicePy) -and (Test-Path $capture)) {
-          Write-Info '尝试复用鲸鲸现有语音生成参考音（需要鲸鲸/微信在运行，文件传输助手会收到测试语音）'
-          & $voicePy $capture --runtime-root $Root --whale-girl $wg
-          if ($LASTEXITCODE -eq 0) { $done = $true; Write-Info '已用鲸鲸现有语音生成参考音' }
-          else { Write-Host '复用鲸鲸语音失败，回退 Windows 本地 TTS' -ForegroundColor Yellow }
+
+      if ($BreezeKey) {
+        $py = Join-Path $Root 'engine\venv\Scripts\python.exe'
+        $script = Join-Path $PSScriptRoot 'payload\seedvc\tts_ref.py'
+        $ffmpeg = Join-Path $Root 'tools\ffmpeg\ffmpeg.exe'
+        $priorKey = $env:BREEZE_API_KEY
+        try {
+          $env:BREEZE_API_KEY = $BreezeKey
+          & $py $script --runtime-root $Root --whale-girl $wg --ffmpeg $ffmpeg
+        } finally {
+          $env:BREEZE_API_KEY = $priorKey
         }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-ReferenceReady)) { throw 'Breeze 参考音生成失败' }
+        return
       }
-      if (-not $done) {
-        $extra = @()
-        if ($BreezeKey) { $extra = @('--breeze-key', $BreezeKey) }
-        & $py $script --runtime-root $Root --whale-girl $wg --ffmpeg $ffmpeg @extra
-        if ($LASTEXITCODE -ne 0) { throw '参考音生成失败' }
+
+      Write-Host '方案 B 会复用鲸鲸当前语音，需先打开鲸鲸与微信，确认语音已开启且 VB-CABLE 就绪。'
+      Write-Host '开始后会向自己的文件传输助手发送测试语音，录音只保存在本机。'
+      $runCapture = $UseInstalledVoice
+      if (-not $runCapture -and -not $Yes) {
+        $runCapture = (Read-Host '已准备好，现在开始方案 B？输入 Y 确认，回车留待稍后') -match '^[yY]$'
       }
+      if (-not $runCapture) {
+        $script:ReferenceDeferred = $true
+        Write-Info '参考音待配置。就绪后运行 install.cmd -OnlyStep reference -UseInstalledVoice。'
+        return
+      }
+
+      $voicePy = Join-Path $Root 'voice\venv\Scripts\python.exe'
+      $capture = Join-Path $PSScriptRoot 'payload\seedvc\capture_ref.py'
+      if (-not (Test-Path -LiteralPath $voicePy -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $capture -PathType Leaf)) { throw '请先安装语音依赖，再重试方案 B' }
+      & $voicePy $capture --runtime-root $Root --whale-girl $wg
+      if ($LASTEXITCODE -ne 0 -or -not (Test-ReferenceReady)) {
+        throw '方案 B 未完成。检查鲸鲸账号、微信前台和 VB-CABLE，再重试参考音步骤'
+      }
+      Write-Info '已使用鲸鲸当前语音生成参考音'
     } },
   @{ Id = 'songs'; Name = '默认测试歌曲'; Action = {
       New-Item -ItemType Directory -Force -Path (Join-Path $Root 'data\songs') | Out-Null
@@ -525,7 +609,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.14' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.17' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
@@ -546,10 +630,12 @@ foreach ($step in $steps) {
     }
     continue
   }
-  if ((Test-Done $state $step.Id) -and -not ($step.Id -eq 'reference' -and $UseInstalledVoice) -and -not ($ForceSteps -contains $step.Id)) { Write-Info '已完成，跳过'; continue }
+  $redoReference = $step.Id -eq 'reference' -and ($UseInstalledVoice -or $BreezeKey -or -not (Test-ReferenceReady))
+  $repairCuda = $step.Id -eq 'deps' -and (Test-Done $state 'deps') -and -not (Test-CudaExecution (Join-Path $Root 'engine\venv\Scripts\python.exe'))
+  if ((Test-Done $state $step.Id) -and -not $redoReference -and -not $repairCuda -and -not ($ForceSteps -contains $step.Id)) { Write-Info '已完成，跳过'; continue }
   try {
     & $step.Action
-    if ($step.Id -eq 'env') { }
+    if ($step.Id -eq 'reference' -and $script:ReferenceDeferred) { continue }
     Mark-Done $state $step.Id 'ok'
     $didRun = $true
   } catch {
@@ -563,7 +649,9 @@ if ($DryRun) {
   Write-Host ''
   Write-Host '检查结束（DryRun：没有下载、没有修改任何文件）。' -ForegroundColor Yellow
 } elseif ($OnlyStep) {
-  if (-not $didRun) { Write-Host '步骤已完成，覆盖升级请加 -ForceSteps。' }
+  if ($OnlyStep -eq 'reference' -and $script:ReferenceDeferred) {
+    Write-Host '方案 B 等待用户运行，参考音步骤未标记为完成。'
+  } elseif (-not $didRun) { Write-Host '步骤已完成，覆盖升级请加 -ForceSteps。' }
 } elseif ($pending.Count -eq 0 -and -not $didRun) {
   Write-Host ''
   Write-Host '所有步骤均已完成，本次没有修改。' -ForegroundColor Green
@@ -575,5 +663,5 @@ if ($DryRun) {
   Write-Host ' 1) 重启电脑'
   Write-Host ' 2) 声音设置：输出选 CABLE Input，输入选 CABLE Output'
   Write-Host ' 3) 启动鲸鲸，在插件市场启用 Breezeblue 翻唱'
-  Write-Host ' 4) 私聊发：点歌 加入的歌名'
+  Write-Host ' 4) 完成方案 B 后，私聊发：点歌 加入的歌名'
 }

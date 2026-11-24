@@ -112,7 +112,16 @@ function cmdList() {
     if (!o) return [];
     if (wanted && !wanted.has(o.status)) return [];
     return [o];
-  }).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(0, limit);
+  }).sort((a, b) => {
+    const rank = { making: 0, pending: 1, ready: 2 };
+    if (flag('active-first')) {
+      const priority = (rank[a.status] ?? 3) - (rank[b.status] ?? 3);
+      if (priority) return priority;
+      if (a.status === 'ready') return String(b.updatedAt).localeCompare(String(a.updatedAt));
+    }
+    if (flag('newest')) return String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt));
+    return String(a.createdAt).localeCompare(String(b.createdAt));
+  }).slice(0, limit);
   out({ ok: true, orders });
 }
 
@@ -134,7 +143,9 @@ function cmdRender() {
   const source = arg('source') || order.source;
   if (!source || !fs.existsSync(source)) return fail('source not found: ' + source);
   const engine = arg('engine', order.engine || 'seedvc');
+  const fullTrack = flag('full');
   order.status = 'making';
+  order.fullTrack = fullTrack;
   order.source = source;
   order.engine = engine;
   order.events = order.events || [];
@@ -142,20 +153,27 @@ function cmdRender() {
   saveOrder(order);
 
   fs.mkdirSync(path.join(DATA, 'work', id), { recursive: true });
-  const result = spawnSync(PY, [RENDER, '--id', id, '--source', source, '--engine', engine, '--data', DATA], {
-    cwd: ROOT, windowsHide: true, encoding: 'utf8', timeout: 20 * 60 * 1000,
+  const args = [RENDER, '--id', id, '--source', source, '--engine', engine, '--data', DATA];
+  if (fullTrack) args.push('--full');
+  const result = spawnSync(PY, args, {
+    cwd: ROOT, windowsHide: true, encoding: 'utf8', timeout: (fullTrack ? 185 : 20) * 60 * 1000,
     maxBuffer: 16 * 1024 * 1024,
   });
   const fresh = readOrder(id);
-  if (result.error) {
-    return fail('render failed: ' + result.error.message, 2);
+  if (fresh?.status === 'canceled') return out({ ok: true, order: fresh, canceled: true });
+  if (fresh?.status === 'ready') return out({ ok: true, order: fresh });
+  const detail = result.error?.message || (result.stderr || result.stdout || '').trim().split('\n').slice(-6).join(' | ');
+  const reasonCode = /CUDA_ARCH_UNSUPPORTED|no kernel image/i.test(detail) ? 'cuda_arch'
+    : /CUDA_UNAVAILABLE/i.test(detail) ? 'cuda_unavailable'
+    : result.error?.code === 'ETIMEDOUT' || /RENDER_TIMEOUT/.test(detail) ? 'render_timeout'
+    : /参考音/.test(detail) ? 'reference_required' : 'render_failed';
+  if (fresh?.status === 'making') {
+    fresh.status = 'failed';
+    fresh.renderFailure = reasonCode;
+    fresh.events = [...(fresh.events || []), { at: now(), status: 'failed', note: reasonCode }];
+    saveOrder(fresh);
   }
-  if (fresh) {
-    if (fresh.status === 'canceled') return out({ ok: true, order: fresh, canceled: true });
-    if (fresh.status === 'ready') return out({ ok: true, order: fresh });
-  }
-  const detail = (result.stderr || result.stdout || '').trim().split('\n').slice(-6).join(' | ');
-  return fail('render failed: ' + (detail || 'exit ' + result.status), 2);
+  return out({ ok: false, error: 'render failed: ' + (detail || 'exit ' + result.status), reasonCode }, 2);
 }
 
 function cmdEngine() {

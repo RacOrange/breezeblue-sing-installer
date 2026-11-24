@@ -19,6 +19,11 @@ const python = process.env.BREEZE_PYTHON || 'D:\\whale-cover\\engine\\venv\\Scri
 const cache = process.env.BREEZE_CACHE || 'D:\\whale-cover\\cache';
 const seconds = Math.max(20, Math.min(59, Number(process.env.BREEZE_SECONDS) || 54));
 const work = path.join(data, 'work', id);
+const root = path.dirname(path.dirname(cli));
+const renderDir = path.join(root, 'render');
+const explicitSource = process.env.BREEZE_SOURCE_FILE || '';
+const fullTrack = process.env.BREEZE_FULL_SONG === '1';
+const localOnly = process.env.BREEZE_LOCAL_ONLY === '1' || Boolean(explicitSource);
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
@@ -43,7 +48,7 @@ function norm(value) {
 }
 function readProxy() {
   try {
-    return JSON.parse(fs.readFileSync('D:\\whale-cover\\config.json', 'utf8')).proxy || '';
+    return JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')).proxy || '';
   } catch { return ''; }
 }
 const EXTS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma']);
@@ -123,9 +128,11 @@ function main() {
     progress('准备中');
     let source = '';
     let meta = null;
-    const local = findLocal();
+    const local = explicitSource
+      ? (fs.statSync(explicitSource, { throwIfNoEntry: false })?.isFile() ? explicitSource : '')
+      : findLocal();
     if (local) { source = local; log(`本地音源：${local}`); }
-    else {
+    else if (!localOnly) {
       const got = download();
       if (got) { source = got.path; meta = got; }
     }
@@ -135,25 +142,33 @@ function main() {
     }
     if (meta && meta.title) updateOrderMeta(meta);
 
-    const cut = path.join(work, 'chorus.wav');
-    const py = `import sys; sys.path.insert(0, r'D:\\whale-cover\\render'); import render_cover; render_cover.pick_chorus(sys.argv[1], sys.argv[2], int(sys.argv[3])); print('cut ok')`;
-    const r = spawnSync(python, ['-c', py, source, work, String(seconds)], { windowsHide: true, encoding: 'utf8', timeout: 5 * 60 * 1000 });
-    if (r.status !== 0 || !fs.existsSync(cut)) {
-      prep('error', { error: '切副歌失败：' + String(r.stderr || r.error || '').slice(-160) });
-      return 0;
+    let cut = source;
+    if (!fullTrack) {
+      cut = path.join(work, 'chorus.wav');
+      const py = 'import sys; sys.path.insert(0, sys.argv[1]); import render_cover; render_cover.pick_chorus(sys.argv[2], sys.argv[3], int(sys.argv[4])); print("cut ok")';
+      const r = spawnSync(python, ['-c', py, renderDir, source, work, String(seconds)], { windowsHide: true, encoding: 'utf8', timeout: 5 * 60 * 1000 });
+      if (r.status !== 0 || !fs.existsSync(cut)) {
+        prep('error', { error: '切副歌失败：' + String(r.stderr || r.error || '').slice(-160) });
+        return 0;
+      }
+      log(`副歌已切：${cut}`);
+
     }
-    log(`副歌已切：${cut}`);
 
     progress('换声合成');
     const render = spawnSync(process.execPath, [cli, 'render', id, '--engine', process.env.BREEZE_ENGINE || 'seedvc',
-      '--source', cut, '--json'], { windowsHide: true, encoding: 'utf8', timeout: 30 * 60 * 1000, maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, WHALE_COVER_DATA_DIR: data } });
+      '--source', cut, ...(fullTrack ? ['--full'] : []), '--json'], {
+      windowsHide: true, encoding: 'utf8', timeout: (fullTrack ? 200 : 30) * 60 * 1000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, WHALE_COVER_DATA_DIR: data,
+        BREEZE_FFMPEG_EXE: process.env.BREEZE_FFMPEG_DIR
+          ? path.join(process.env.BREEZE_FFMPEG_DIR, 'ffmpeg.exe') : '' } });
     const text = String(render.stdout || '').trim();
     let parsed = null;
     try { parsed = JSON.parse(text.split('\n').filter(Boolean).pop() || '{}'); } catch { /* ignore */ }
     if (render.status !== 0 || !parsed || parsed.ok !== true) {
       const detail = String(render.stderr || text || '').trim().split('\n').slice(-3).join(' | ');
-      prep('error', { error: '渲染失败：' + (detail || 'exit ' + render.status) });
+      prep('error', { reasonCode: parsed?.reasonCode, error: '渲染失败：' + (detail || 'exit ' + render.status) });
       return 0;
     }
     prep('ok', { song });

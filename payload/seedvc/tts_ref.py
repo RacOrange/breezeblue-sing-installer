@@ -4,7 +4,7 @@
 优先顺序：
 1. --breeze-key / BREEZE_API_KEY：Breeze 官方 API（音色与鲸鲸一致）
 2. --import-dir：导入已有的 voice_*.wav
-3. Windows 本地 TTS（System.Speech）自动生成，作为无需 Key 的默认方案
+首次安装的方案 B 在安装器的 capture_ref.py 路径执行。
 """
 import argparse
 import json
@@ -12,7 +12,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 
 import requests
 
@@ -88,36 +87,6 @@ def to_wav(src, dst, ffmpeg):
     raise RuntimeError('无法转换音频：' + src)
 
 
-def sapi_synth(text, rate, out_file):
-    script = os.path.join(tempfile.gettempdir(), 'sing-sapi-%d.ps1' % os.getpid())
-    safe_text = text.replace("'", "''")
-    safe_out = out_file.replace("'", "''")
-    content = (
-        "Add-Type -AssemblyName System.Speech\n"
-        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
-        "$zh = $s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like 'zh-*' } | Select-Object -First 1\n"
-        "if ($zh) { $s.SelectVoice($zh.VoiceInfo.Name) }\n"
-        "$s.Rate = %d\n"
-        "$s.Volume = 100\n"
-        "$s.SetOutputToWaveFile('%s')\n"
-        "$s.Speak('%s')\n"
-        "$s.Dispose()\n" % (rate, safe_out, safe_text)
-    )
-    with open(script, 'w', encoding='utf-8-sig') as handle:
-        handle.write(content)
-    try:
-        result = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                                 '-File', script], capture_output=True, text=True, timeout=120)
-        if result.returncode != 0 or not os.path.exists(out_file) or os.path.getsize(out_file) < 2000:
-            raise RuntimeError('Windows TTS 失败：' + (result.stderr or '')[:200])
-    finally:
-        try:
-            os.remove(script)
-        except OSError:
-            pass
-    return out_file
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--runtime-root', required=True)
@@ -157,11 +126,7 @@ def main():
             results.append({'emotion': emotion, 'label': label, 'file': 'profiles/voice_%s.wav' % emotion})
         mode = 'breeze'
     else:
-        for index, (emotion, label, _instruction, rate) in enumerate(EMOTIONS):
-            wav = os.path.join(profiles_dir, 'voice_%s.wav' % emotion)
-            sapi_synth(TEXTS[index], rate, wav)
-            results.append({'emotion': emotion, 'label': label, 'file': 'profiles/voice_%s.wav' % emotion})
-        mode = 'windows-tts'
+        raise SystemExit('请用安装器进入方案 B，或显式提供 Breeze Key / 导入参考音')
 
     profiles = {
         'version': 1,

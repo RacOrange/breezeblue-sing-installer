@@ -10,7 +10,6 @@ import os
 import re
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -150,23 +149,38 @@ def cable_output_device():
     return None, None
 
 
-def voice_items(win):
-    names = Counter()
-    for c in walk(win):
+def voice_items(win, field):
+    try:
+        box = field.BoundingRectangle
+        left, right = int(box.left), int(box.right)
+    except Exception:
+        return {}
+    if right - left < 180:
+        return {}
+    items = {}
+    for control in walk(win):
         try:
-            if c.ClassName == 'mmui::ChatVoiceItemView':
-                name = str(c.Name or '').strip()
-                if name:
-                    names[name] += 1
+            if control.ClassName != 'mmui::ChatVoiceItemView':
+                continue
+            identity = tuple(control.GetRuntimeId())
+            rect = control.BoundingRectangle
+            start, end = int(rect.left), int(rect.right)
+            if not identity or not left <= start < end <= right:
+                continue
+            name = str(control.Name or '').strip()
+            # 只有完全处在聊天区右半边、靠近右侧锚点的语音气泡才有资格确认。
+            outgoing = start >= (left + right) / 2 and right - end <= (right - left) * 0.25
+            items[identity] = (name, outgoing)
         except Exception:
             pass
-    return names
+    return items
 
 
 def has_new_voice(before, after, duration):
-    for name in after - before:
+    for identity in after.keys() - before.keys():
+        name, outgoing = after[identity]
         matched = re.search(r'(\d+)\s*["″”秒]', name)
-        if matched and abs(int(matched.group(1)) - duration) <= 2:
+        if outgoing and matched and abs(int(matched.group(1)) - duration) <= 2:
             return True
     return False
 
@@ -250,7 +264,7 @@ def send(args, attempt):
     if args.result_file and not account_ready():
         log('FAIL 微信绑定账号未通过核验')
         return 2
-    before = voice_items(win)
+    before = voice_items(win, field)
     if user32.GetForegroundWindow() != hwnd or (
         not args.trusted and not title_ok(win, args.chat, args.chat_type)
     ):
@@ -266,9 +280,26 @@ def send(args, attempt):
         user32.keybd_event(VK_TAB, 0, 0, 0)
         tab_held = True
         time.sleep(0.4)
-        sd.play(data, sr, device=dev, blocking=True)
+        sd.play(data, sr, device=dev, blocking=False)
+        next_target_check = time.monotonic()
+        while sd.get_stream().active:
+            now = time.monotonic()
+            if user32.GetForegroundWindow() != hwnd or (
+                now >= next_target_check and not args.trusted and not title_ok(win, args.chat, args.chat_type)
+            ):
+                sd.stop()
+                log('UNCERTAIN 播放中会话或前台变化，已停止音频')
+                return 3
+            if now >= next_target_check:
+                next_target_check = now + 0.5
+            time.sleep(0.05)
+        sd.wait()
         time.sleep(max(0.0, args.hold_extra))
     finally:
+        try:
+            sd.stop()
+        except Exception:
+            pass
         if tab_held:
             user32.keybd_event(VK_TAB, 0, KEYUP, 0)
             time.sleep(0.05)
@@ -281,7 +312,7 @@ def send(args, attempt):
             not args.trusted and not title_ok(win, args.chat, args.chat_type)
         ):
             break
-        if has_new_voice(before, voice_items(win), duration):
+        if has_new_voice(before, voice_items(win, field), duration):
             log('OK 已发送（音频 %.1fs）' % duration)
             return 0
         time.sleep(0.25)
