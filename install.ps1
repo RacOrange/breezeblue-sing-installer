@@ -131,7 +131,13 @@ function Test-Admin {
 }
 function Find-WhaleGirl {
   $candidates = @()
-  if ($WhaleGirl) { $candidates += $WhaleGirl }
+  if ($WhaleGirl) {
+    $config = Join-Path $WhaleGirl 'data\config.json'
+    if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
+      throw '显式指定的鲸鲸目录缺少 data/config.json，请核对 -WhaleGirl 路径。'
+    }
+    return (Resolve-Path -LiteralPath $WhaleGirl -ErrorAction Stop).ProviderPath
+  }
   if ($env:WHALE_GIRL_HOME) { $candidates += $env:WHALE_GIRL_HOME }
   $candidates += @(
     (Join-Path $env:LOCALAPPDATA 'Programs\WhaleGirl'),
