@@ -6,7 +6,7 @@
  * 群友发「点歌 起风了」后：
  *   1. 落单（cover order），由 timer.tick 起 breeze-prep.mjs；
  *   2. breeze-prep 用在线音源下原曲、切 54 秒副歌，再调 seed-vc 换声；
- *   3. 成品出来后用 whale.sendVoice 发 [[cover:<单号>]]，鲸鲸语音桥把
+ *   3. 成品出来后直接 spawn 运行时里的 send_cover.py，把本地音频发成语音（不依赖宿主补丁）；
  *      它换成 breezeblue 音色的翻唱音频，录成微信语音发回群里。
  */
 
@@ -148,6 +148,25 @@ function dataRoot(settings) {
   if (custom) return custom;
   if (process.env.WHALE_COVER_DATA_DIR) return process.env.WHALE_COVER_DATA_DIR;
   return path.join(os.homedir(), '.dsh', 'whale-cover');
+}
+
+// 直接调用运行时里的本地发送器，不依赖鲸鲸宿主的 [[cover]] 补丁。
+// chatName 必须是微信里可搜索到的会话标题，不能是内部 wxid。
+function sendCoverFile(settings, chatName, wav) {
+  const root = path.dirname(dataRoot(settings));
+  const py = settings.voicePython || path.join(root, 'voice', 'venv', 'Scripts', 'python.exe');
+  const script = settings.voiceSender || path.join(root, 'voice', 'send_cover.py');
+  if (!fs.existsSync(py)) throw new Error('缺少发送器 Python：' + py);
+  if (!fs.existsSync(script)) throw new Error('缺少 send_cover.py：' + script);
+  const wavPath = path.isAbsolute(String(wav || '')) ? String(wav) : path.join(dataRoot(settings), String(wav || ''));
+  if (!wav || !fs.existsSync(wavPath)) throw new Error('音频不存在：' + wav);
+  const title = String(chatName || '').trim();
+  if (!title || title === '-' || title.startsWith('wxid_')) throw new Error('会话标题无效：' + chatName);
+  const child = spawn(py, [script, '--wav', wavPath, '--chat', title], {
+    detached: true, windowsHide: true, stdio: 'ignore',
+  });
+  child.unref();
+  return child.pid || 0;
 }
 
 function prepScriptPath(settings) {
@@ -352,11 +371,7 @@ async function deliverReady(whale, settings, order, state) {
   if (!ensured || !ensured.ok) return false;
 
   try {
-    const sent = await whale.sendVoice(target.id, `[[cover:${order.id}]]`, {
-      name: target.name,
-      chatType: 'group',
-    });
-    if (!sent || !sent.id) return false;
+    if (!sendCoverFile(settings, target.name, order.audio)) return false;
   } catch { return false; }
 
   state.sent = state.sent || {};
@@ -772,7 +787,7 @@ async function handleCancel(whale, message, settings, wanted) {
  * 「唱 起风了」：把已经做好的成品，通过鲸鲸的语音链路唱出来。
  *
  * 做法不是发文件（插件也没有发文件的能力），而是让鲸鲸照常「发语音」：
- * 语音里那句文本实际是 [[cover:<单号>]]，本机语音桥把它换成成品音频，
+ * 语音发送使用本机 send_cover.py 直接播放成品，不再经过宿主 [[cover]] 桥，
  * 播放进虚拟声卡 → 微信录成语音。见 whale-plugin/voice-bridge.mjs。
  */
 async function handleSing(whale, message, settings, wanted) {
@@ -802,12 +817,7 @@ async function handleSing(whale, message, settings, wanted) {
   }
 
   try {
-    const isGroup = message.chatType === 'group';
-    const sent = await whale.sendVoice(chatFor(message), `[[cover:${target.id}]]`, {
-      name: nameFor(message),
-      chatType: isGroup ? 'group' : 'private',
-    });
-    if (!sent || !sent.id) throw new Error('没有排上');
+    if (!sendCoverFile(settings, nameFor(message), target.audio)) throw new Error('发送器没有启动');
   } catch {
     await reply(whale, message, '这段没发出去，等会儿再试。');
     return;

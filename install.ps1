@@ -499,7 +499,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.12' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.13' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
