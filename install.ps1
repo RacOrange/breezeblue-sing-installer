@@ -371,7 +371,7 @@ $steps = @(
         hooks = @('chat.pre_reply', 'timer.tick')
         permissions = @('system.full')
         executionTimeoutMs = 20000; intervalSeconds = 10
-        javascript = (Get-Content $src -Raw -Encoding UTF8)
+        javascript = [System.IO.File]::ReadAllText($src, (New-Object System.Text.UTF8Encoding($false)))
       }
       $flowPath = Join-Path $plugins 'breezeblue-sing.flow.json'
       $flowBytes = [System.Text.Encoding]::UTF8.GetBytes(($flow | ConvertTo-Json -Depth 6 -Compress))
@@ -476,7 +476,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.6' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.8' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
