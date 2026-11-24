@@ -89,17 +89,27 @@ function Find-WhaleGirl {
     'E:\Program Files\WhaleGirl',
     'D:\Program Files\WhaleGirl',
     'E:\WhaleGirl',
-    'D:\WhaleGirl',
-    'F:\WhaleGirl'
+    'D:\WhaleGirl'
   )
   foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-    $candidates += (Join-Path ($drive.Name + ':\') 'WhaleGirl')
-    $candidates += (Join-Path ($drive.Name + ':\') 'whale-girl')
+    try {
+      $name = [string]$drive.Name
+      if (-not $name) { continue }
+      $root = $name + ':\'
+      if (-not (Test-Path -LiteralPath $root -ErrorAction SilentlyContinue)) { continue }
+      $candidates += ($root + 'WhaleGirl')
+      $candidates += ($root + 'whale-girl')
+    } catch { continue }
   }
   $proc = Get-Process WhaleLauncher -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($proc -and $proc.Path) { $candidates += (Split-Path $proc.Path -Parent) }
-  $candidates = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ 'data\config.json')) }
-  if ($candidates) { return ($candidates | Select-Object -First 1) }
+  $candidates = $candidates | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique
+  foreach ($candidate in $candidates) {
+    try {
+      $config = Join-Path ([string]$candidate) 'data\config.json'
+      if (Test-Path -LiteralPath $config -ErrorAction SilentlyContinue) { return [string]$candidate }
+    } catch { continue }
+  }
   # 注册表兜底
   try {
     $keys = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue
@@ -449,7 +459,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.3' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.4' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
