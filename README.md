@@ -206,6 +206,47 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -OnlyStep reference -Bree
 
 ## 11. 升级 / 卸载
 
+### 从 1.0.1 等旧版升级到新版
+
+直接覆盖安装时，旧安装状态会显示“已完成，跳过”，运行时脚本和插件可能不会更新。请用 `-ForceSteps` 指定要重新部署的步骤：
+
+1. 下载新版安装包并解压。
+2. 右键 `install.cmd` → 以管理员身份运行，或打开管理员 PowerShell 进入解压目录。
+3. 执行：
+
+   ```bat
+   install.cmd -ForceSteps voice,seedvc,plugin
+   ```
+
+   等价的 PowerShell：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1 -ForceSteps voice,seedvc,plugin
+   ```
+
+| 步骤 | 更新的内容 |
+| --- | --- |
+| `voice` | 语音发送依赖 + `send_cover.py`（首尾缓冲/淡入淡出） |
+| `seedvc` | 渲染脚本 `render_cover.py`、seed-vc 辅助脚本 |
+| `plugin` | 市场插件 `breezeblue-sing` |
+| `reference` | 重新生成参考音（会覆盖 `ref`，需要时再加） |
+
+- **不要**删除 `.installer-state.json`，否则会重新走全部步骤；
+- 模型和 venv 已存在，不会重新下载；
+- 升级后重启鲸鲸内核，让插件生效。
+
+### 如果窗口显示“所有步骤均已完成，本次没有修改”
+
+说明旧版本的安装状态还在，这不是新安装完成。按上面的 `-ForceSteps` 升级即可。
+
+### 卸载
+
+- 停用插件即可停止功能；
+- 删除运行时目录（默认 `%USERPROFILE%\whale-cover` 或安装时选的盘）；
+- 安装器在鲸鲸 `data\backup-sing-installer-*` 里保留了插件/配置备份；
+- VB-CABLE 可在“应用和功能”里卸载。
+
+
 - **升级**：下载新安装包，直接覆盖安装；已完成的运行时会跳过，不会重复下载。
 - **停用**：插件市场里禁用插件即可。
 - **卸载**：禁用插件 → 删除运行时目录（默认 `%USERPROFILE%\whale-cover`，或你安装时选的盘）→ 在“应用和功能”里卸载 VB-CABLE。

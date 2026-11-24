@@ -5,7 +5,8 @@
   [string]$WhaleGirl = '',
   [string]$OnlyStep = '',
   [string]$BreezeKey = '',
-  [switch]$UseInstalledVoice
+  [switch]$UseInstalledVoice,
+  [string[]]$ForceSteps = @()
 )
 
 $ErrorActionPreference = 'Continue'
@@ -476,7 +477,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.9' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.10' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
@@ -497,7 +498,7 @@ foreach ($step in $steps) {
     }
     continue
   }
-  if ((Test-Done $state $step.Id) -and -not ($step.Id -eq 'reference' -and $UseInstalledVoice)) { Write-Info '已完成，跳过'; continue }
+  if ((Test-Done $state $step.Id) -and -not ($step.Id -eq 'reference' -and $UseInstalledVoice) -and -not ($ForceSteps -contains $step.Id)) { Write-Info '已完成，跳过'; continue }
   try {
     & $step.Action
     if ($step.Id -eq 'env') { }
@@ -507,5 +508,21 @@ foreach ($step in $steps) {
   }
 }
 
-Write-Host ''
-Write-Host 'P1 检查结束。下一步由 P2 实现真实下载与安装。' -ForegroundColor Green
+$state = Read-State
+$pending = @($steps | Where-Object { -not (Test-Done $state $_.Id) })
+if ($DryRun) {
+  Write-Host ''
+  Write-Host '检查结束（DryRun：没有下载、没有修改任何文件）。' -ForegroundColor Yellow
+} elseif ($pending.Count -eq 0 -and -not $didRun) {
+  Write-Host ''
+  Write-Host '所有步骤均已完成，本次没有修改。' -ForegroundColor Green
+  Write-Host '如果你是从旧版升级，请用 -ForceSteps 重新部署新脚本/插件：' -ForegroundColor Yellow
+  Write-Host '  install.cmd -ForceSteps voice,seedvc,plugin' -ForegroundColor Yellow
+} else {
+  Write-Host ''
+  Write-Host '安装完成！下一步：' -ForegroundColor Green
+  Write-Host ' 1) 重启电脑'
+  Write-Host ' 2) 声音设置：输出选 CABLE Input，输入选 CABLE Output'
+  Write-Host ' 3) 启动鲸鲸，在插件市场启用 Breezeblue 翻唱'
+  Write-Host ' 4) 私聊发：点歌 see you again'
+}
