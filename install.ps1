@@ -121,6 +121,23 @@ function Find-WhaleGirl {
       }
     }
   } catch { }
+  # 兜底：各盘浅层扫描自定义目录（支持中文/空格路径，例如 D:\我的软件\whaleGirl）
+  foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+    try {
+      $name = [string]$drive.Name
+      if (-not $name) { continue }
+      $root = $name + ':\'
+      if (-not (Test-Path -LiteralPath $root -ErrorAction SilentlyContinue)) { continue }
+      $dirs = Get-ChildItem -LiteralPath $root -Directory -Depth 2 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^(?i)whale-?girl$' -or $_.Name -eq '鲸鲸' }
+      foreach ($dir in $dirs) {
+        try {
+          $config = Join-Path $dir.FullName 'data\config.json'
+          if (Test-Path -LiteralPath $config -ErrorAction SilentlyContinue) { return $dir.FullName }
+        } catch { continue }
+      }
+    } catch { continue }
+  }
   return ''
 }
 function Get-NvidiaInfo {
@@ -459,7 +476,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.5' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.6' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
