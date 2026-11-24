@@ -10,6 +10,7 @@ import sys
 import time
 
 import sounddevice as sd
+import numpy as np
 import soundfile as sf
 import uiautomation as auto
 
@@ -209,6 +210,19 @@ def main():
         log('FAIL 找不到 CABLE Input')
         return 2
     data, sr = sf.read(args.wav, dtype='float32')
+    # 给微信录音留出启动/收尾缓冲，避免前后被切
+    lead = np.zeros((int(sr * 0.8),) + data.shape[1:], dtype='float32')
+    tail = np.zeros((int(sr * 0.6),) + data.shape[1:], dtype='float32')
+    data = np.concatenate([lead, data, tail], axis=0)
+    fade = min(int(sr * 0.05), max(0, len(data) // 2))
+    if fade > 0:
+        ramp = np.linspace(0.0, 1.0, fade, dtype='float32')
+        if data.ndim > 1:
+            data[:fade] *= ramp[:, None]
+            data[-fade:] *= ramp[::-1][:, None]
+        else:
+            data[:fade] *= ramp
+            data[-fade:] *= ramp[::-1]
     duration = len(data) / float(sr)
     if duration > 59:
         log('FAIL 音频 %.1fs 超过微信 60 秒上限' % duration)

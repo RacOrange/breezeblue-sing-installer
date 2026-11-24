@@ -16,14 +16,14 @@ import librosa
 import numpy as np
 import soundfile as sf
 
-ROOT = os.environ.get('SING_ROOT') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SEED = os.environ.get('SING_SEEDVC') or os.path.join(ROOT, 'seed-vc')
+ROOT = r'D:\whale-cover'
+SEED = os.path.join(ROOT, 'seed-vc')
 PY = os.path.join(ROOT, 'engine', 'venv', 'Scripts', 'python.exe')
 INFER = os.path.join(SEED, 'inference_local.py')
 CONFIG = os.path.join(SEED, 'configs', 'local_sing.yml')
 REF_DIR = os.path.join(ROOT, 'ref')
 PROFILES = os.path.join(REF_DIR, 'profiles.json')
-FFMPEG = os.environ.get('SING_FFMPEG') or os.path.join(ROOT, 'tools', 'ffmpeg', 'ffmpeg.exe')
+FFMPEG = r'C:\Users\test\AppData\Local\Programs\ffmpeg\bin\ffmpeg.exe'
 
 # demucs 的权重走 HuggingFace；国内直连会超时，统一走镜像并把缓存放 D 盘
 HF_ENV = {
@@ -119,14 +119,8 @@ def choose_profile(order):
 
 
 def find_checkpoint():
-    patterns = [
-        os.path.join(SEED, 'checkpoints', 'models--Plachta--Seed-VC', 'snapshots', '*', 'DiT_*f0*.pth'),
-        os.path.join(SEED, 'checkpoints', 'DiT_*f0*.pth'),
-    ]
-    files = []
-    for pattern in patterns:
-        files.extend(glob.glob(pattern))
-    files = sorted(files, key=os.path.getmtime, reverse=True)
+    pat = os.path.join(SEED, 'checkpoints', 'models--Plachta--Seed-VC', 'snapshots', '*', 'DiT_*f0*.pth')
+    files = sorted(glob.glob(pat), key=os.path.getmtime, reverse=True)
     if not files:
         raise RuntimeError('找不到 seed-vc checkpoint')
     return files[0]
@@ -249,6 +243,17 @@ def main():
     progress(work, '混音')
     cover = mix(converted, inst, work)
     y, sr = sf.read(cover, always_2d=False)
+    # 首尾淡入淡出，避免切歌点爆音/听感断裂
+    fade_n = min(int(sr * 0.30), max(0, len(y) // 2))
+    if fade_n > 0:
+        ramp = np.linspace(0.0, 1.0, fade_n, dtype='float32')
+        if y.ndim > 1:
+            y[:fade_n] *= ramp[:, None]
+            y[-fade_n:] *= ramp[::-1][:, None]
+        else:
+            y[:fade_n] *= ramp
+            y[-fade_n:] *= ramp[::-1]
+        sf.write(cover, y, sr)
     duration = round(len(y) / sr, 2)
     rel = os.path.relpath(cover, data).replace('\\', '/')
     current.update({
