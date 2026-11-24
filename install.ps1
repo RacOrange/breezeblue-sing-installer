@@ -404,6 +404,15 @@ $steps = @(
         ($grant | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
       [System.IO.File]::WriteAllText((Join-Path $plugins 'breezeblue-sing.enabled'), '',
         (New-Object System.Text.UTF8Encoding($false)))
+      # 同时放一份市场同款 ZIP：鲸鲸「已安装」列表按 ZIP 展示卡片，缺它会看不到插件
+      try {
+        $pkgDir = Join-Path $env:TEMP ('breezeblue-sing-pkg-' + $stamp)
+        New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+        Copy-Item (Join-Path $PSScriptRoot 'payload\plugin\plugin.json') (Join-Path $pkgDir 'plugin.json') -Force
+        Copy-Item $src (Join-Path $pkgDir 'plugin.js') -Force
+        Compress-Archive -Path (Join-Path $pkgDir 'plugin.json'),(Join-Path $pkgDir 'plugin.js') -DestinationPath (Join-Path $plugins 'breezeblue-sing.zip') -Force
+        Remove-Item $pkgDir -Recurse -Force -ErrorAction SilentlyContinue
+      } catch { Write-Host ('WARNING: 生成插件 ZIP 失败：' + $_.Exception.Message) -ForegroundColor Yellow }
       # 开启 JS 插件总闸（只改数据目录 config.json，不改程序）
       $cfgFile = Join-Path $wg 'data\config.json'
       if (Test-Path $cfgFile) {
@@ -490,7 +499,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.11' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.12' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
