@@ -41,7 +41,15 @@ function Write-Info([string]$Text) {
   try { Add-Content -Path $script:LogFile -Value $line -Encoding UTF8 } catch { }
 }
 function Write-Step([string]$Text) { Write-Host ''; Write-Host ('== ' + $Text + ' ==') -ForegroundColor Cyan }
-function Fail([string]$Text) { Write-Host ('ERROR: ' + $Text) -ForegroundColor Red; exit 1 }
+function Fail([string]$Text) {
+  Write-Host ('ERROR: ' + $Text) -ForegroundColor Red
+  try { Add-Content -Path $script:LogFile -Value (('[' + (Get-Date -Format 'HH:mm:ss') + '] ERROR ' + $Text)) -Encoding UTF8 } catch { }
+  if (-not $DryRun -and -not $Yes) {
+    Write-Host ''
+    Read-Host '按回车键退出（截图或复制上面的错误发给开发者）' | Out-Null
+  }
+  exit 1
+}
 
 function Read-State {
   if (Test-Path $script:StateFile) {
@@ -76,9 +84,17 @@ function Find-WhaleGirl {
     (Join-Path $env:LOCALAPPDATA 'Programs\WhaleGirl'),
     (Join-Path $env:ProgramFiles 'WhaleGirl'),
     (Join-Path ${env:ProgramW6432} 'WhaleGirl'),
+    (Join-Path $env:USERPROFILE 'WhaleGirl'),
     'E:\Program Files\WhaleGirl',
-    'D:\Program Files\WhaleGirl'
+    'D:\Program Files\WhaleGirl',
+    'E:\WhaleGirl',
+    'D:\WhaleGirl',
+    'F:\WhaleGirl'
   )
+  foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+    $candidates += (Join-Path ($drive.Name + ':\') 'WhaleGirl')
+    $candidates += (Join-Path ($drive.Name + ':\') 'whale-girl')
+  }
   $proc = Get-Process WhaleLauncher -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($proc -and $proc.Path) { $candidates += (Split-Path $proc.Path -Parent) }
   $candidates = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ 'data\config.json')) }
@@ -191,12 +207,21 @@ $steps = @(
       $wgText = if ($wg) { $wg } else { '未检测到' }
       Write-Info ('管理员=' + $admin + '；GPU=' + $gpuText + '；微信=' + $wechatText + '；鲸鲸=' + $wgText + '；磁盘=' + $free + 'GB')
       if (-not $gpu) {
-        if ($DryRun) { Write-Host 'WARNING: 未检测到 NVIDIA GPU / nvidia-smi' -ForegroundColor Yellow }
-        else { Fail '未检测到 NVIDIA GPU / nvidia-smi' }
+        Write-Host 'WARNING: 未检测到 NVIDIA GPU / nvidia-smi；如果确认有 NVIDIA 显卡，可继续安装，后续用 verify.ps1 检查 CUDA' -ForegroundColor Yellow
       }
       if (-not $wg) {
-        if ($DryRun) { Write-Host 'WARNING: 未找到鲸鲸安装目录（真实安装会中止；可用 -WhaleGirl 指定）' -ForegroundColor Yellow }
-        else { Fail '未找到鲸鲸安装目录；用 -WhaleGirl "路径" 指定' }
+        if ($DryRun) {
+          Write-Host 'WARNING: 未找到鲸鲸安装目录（可用 -WhaleGirl 指定）' -ForegroundColor Yellow
+        } else {
+          Write-Host '没有自动找到鲸鲸安装目录。' -ForegroundColor Yellow
+          Write-Host '请打开鲸鲸安装文件夹，复制地址栏路径（例如 D:\WhaleGirl），粘贴到下面：'
+          $answer = Read-Host '鲸鲸安装目录（直接回车退出）'
+          if ($answer) {
+            $script:WhaleGirl = $answer.Trim().Trim('"')
+            $wg = Find-WhaleGirl
+          }
+          if (-not $wg) { Fail '未找到鲸鲸安装目录；请确认路径下有 data\config.json' }
+        }
       }
       if ($wechat -and $wechat -notmatch '^4\.2\.') { Write-Host 'WARNING: 微信版本不是 4.2，UIA 可能不兼容' -ForegroundColor Yellow }
       if ($free -ge 0 -and $free -lt 10) { Write-Host 'WARNING: 可用空间小于 10GB' -ForegroundColor Yellow }
@@ -410,7 +435,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 (P1)' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.1' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
