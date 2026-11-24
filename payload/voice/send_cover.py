@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 """把本地 wav 发成微信语音：打开/核验会话 → 按住 Ctrl+Tab → 播进 CABLE Input → 松开。
 
-由 bridge/cover_voice.py 调用；退出码 0 表示语音条已出现，2 表示失败。
+由插件或旧桥接调用；退出码 0 表示观察到新语音条，2 表示录音前失败，3 表示送达不确定。
 """
 import argparse
 import ctypes
+import json
+import os
 import re
 import sys
 import time
+from collections import Counter
+from pathlib import Path
+from urllib.request import urlopen
 
 import sounddevice as sd
 import numpy as np
@@ -15,6 +20,12 @@ import soundfile as sf
 import uiautomation as auto
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+kernel32.CreateMutexW.restype = ctypes.c_void_p
+kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
+kernel32.ReleaseMutex.argtypes = (ctypes.c_void_p,)
+kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
 VK_CONTROL = 0x11
 VK_TAB = 0x09
 KEYUP = 0x0002
@@ -27,13 +38,14 @@ def log(msg):
 
 def find_window():
     root = auto.GetRootControl()
+    windows = []
     for c in root.GetChildren():
         try:
-            if (c.ClassName or '') == WECHAT_CLASS:
-                return c
+            if c.ClassName == WECHAT_CLASS:
+                windows.append(c)
         except Exception:
             pass
-    return None
+    return windows[0] if len(windows) == 1 else None
 
 
 def walk(root, limit=9000):
@@ -49,14 +61,15 @@ def walk(root, limit=9000):
             pass
 
 
-def find_session(win, title):
+def session_matches(win, title, chat_type):
+    matches = []
     for c in walk(win):
         try:
-            if (c.ClassName or '') == 'mmui::ChatSessionCell' and (c.Name or '').startswith(title):
-                return c
+            if c.ClassName == 'mmui::ChatSessionCell' and title_matches(c.Name, title, chat_type):
+                matches.append(c)
         except Exception:
             pass
-    return None
+    return matches
 
 
 def find_class(win, cls):
@@ -69,44 +82,39 @@ def find_class(win, cls):
     return None
 
 
-def title_matches(actual, wanted):
-    a = str(actual or '').strip()
-    w = str(wanted or '').strip()
-    if not a or not w:
+def title_matches(actual, wanted, chat_type):
+    actual = str(actual or '').strip()
+    wanted = str(wanted or '').strip()
+    if not actual or not wanted:
         return False
-    if a == w:
+    if actual == wanted:
         return True
-    # 群聊标题常带「(5)」「（5）」成员数后缀，按前缀归一化比较
-    if a.startswith(w) or w.startswith(a):
-        return True
-    return False
+    if chat_type != 'group':
+        return False
+    # 只忽略群标题末尾的成员人数，避免将同名前缀的会话视为目标。
+    return bool(re.fullmatch(re.escape(wanted) + r'\s*(?:\([0-9]+\)|（[0-9]+）)', actual))
 
 
-def title_ok(win, title):
+def title_ok(win, title, chat_type):
     bar = find_class(win, 'mmui::ChatTitleBarChatSingleView')
     if not bar:
         return False
     for c in walk(bar, 400):
         try:
-            if title_matches(c.Name, title):
+            if title_matches(c.Name, title, chat_type):
                 return True
         except Exception:
             pass
     return False
 
 
-def wait_title(win, title, timeout=5.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if title_ok(win, title):
+def wait_title(win, title, chat_type, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if title_ok(win, title, chat_type):
             return True
-        time.sleep(0.4)
+        time.sleep(0.2)
     return False
-
-
-def rect(c):
-    r = c.BoundingRectangle
-    return int(r.left), int(r.top), int(r.right), int(r.bottom)
 
 
 def force_foreground(hwnd):
@@ -143,25 +151,41 @@ def cable_output_device():
 
 
 def voice_items(win):
-    out = []
+    names = Counter()
     for c in walk(win):
         try:
-            if (c.ClassName or '') == 'mmui::ChatVoiceItemView':
-                out.append(((c.Name or ''), rect(c)))
+            if c.ClassName == 'mmui::ChatVoiceItemView':
+                name = str(c.Name or '').strip()
+                if name:
+                    names[name] += 1
         except Exception:
             pass
-    return out
+    return names
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--wav', required=True)
-    ap.add_argument('--chat', required=True)
-    ap.add_argument('--trusted', action='store_true',
-                    help='桥接 prepare() 已核验会话时跳过本脚本的会话核验')
-    ap.add_argument('--hold-extra', type=float, default=0.5)
-    args = ap.parse_args()
+def has_new_voice(before, after, duration):
+    for name in after - before:
+        matched = re.search(r'(\d+)\s*["″”秒]', name)
+        if matched and abs(int(matched.group(1)) - duration) <= 2:
+            return True
+    return False
 
+
+def account_ready():
+    try:
+        with urlopen('http://127.0.0.1:8787/api/status', timeout=3) as response:
+            data = json.load(response)
+        for gateway in data.get('gateways', []):
+            if gateway.get('platform') == 'wechat':
+                bridge = gateway.get('bridge') or {}
+                return bool(bridge.get('online') and bridge.get('uia')
+                            and bridge.get('accountOk') is True and bridge.get('accountGuard') is True)
+    except (OSError, ValueError, TypeError):
+        pass
+    return False
+
+
+def send(args, attempt):
     auto.SetGlobalSearchTimeout(2)
     # 父进程（桥接）会在这段时间里调用 AllowSetForegroundWindow，之后才允许抢前台
     time.sleep(0.8)
@@ -178,23 +202,18 @@ def main():
         return 2
 
     if not args.trusted:
-        if not title_ok(win, args.chat):
-            cell = find_session(win, args.chat)
-            if not cell:
-                log('FAIL 会话列表里没有 %r' % args.chat)
+        candidates = session_matches(win, args.chat, args.chat_type)
+        if len(candidates) > 1:
+            log('FAIL 有多个同名会话')
+            return 2
+        if not title_ok(win, args.chat, args.chat_type):
+            if len(candidates) != 1:
+                log('FAIL 会话列表里没有唯一匹配项')
                 return 2
-            opened = False
-            for _ in range(2):
-                cell.Click()
-                time.sleep(1.3)
-                if wait_title(win, args.chat, 3.0):
-                    opened = True
-                    break
-            if not opened:
-                log('FAIL 标题栏不是 %r' % args.chat)
+            candidates[0].Click()
+            if not wait_title(win, args.chat, args.chat_type):
+                log('FAIL 标题栏与目标不一致')
                 return 2
-    else:
-        log('信任桥接的会话核验，跳过标题检查')
     field = find_class(win, 'mmui::ChatInputField')
     if not field:
         log('FAIL 找不到输入框')
@@ -228,35 +247,96 @@ def main():
         log('FAIL 音频 %.1fs 超过微信 60 秒上限' % duration)
         return 2
 
+    if args.result_file and not account_ready():
+        log('FAIL 微信绑定账号未通过核验')
+        return 2
     before = voice_items(win)
-    held = False
+    if user32.GetForegroundWindow() != hwnd or (
+        not args.trusted and not title_ok(win, args.chat, args.chat_type)
+    ):
+        log('FAIL 开始录音前目标会话或前台变化')
+        return 2
+    # 从发送按键开始起，异常只能记作送达不确定。
+    attempt['recording'] = True
+    control_held = tab_held = False
     try:
         user32.keybd_event(VK_CONTROL, 0, 0, 0)
+        control_held = True
         time.sleep(0.12)
         user32.keybd_event(VK_TAB, 0, 0, 0)
-        held = True
+        tab_held = True
         time.sleep(0.4)
         sd.play(data, sr, device=dev, blocking=True)
         time.sleep(max(0.0, args.hold_extra))
     finally:
-        if held:
+        if tab_held:
             user32.keybd_event(VK_TAB, 0, KEYUP, 0)
             time.sleep(0.05)
+        if control_held:
             user32.keybd_event(VK_CONTROL, 0, KEYUP, 0)
 
-    time.sleep(2.5)
-    after = voice_items(win)
-    if not after:
-        log('FAIL 会话里没有语音条')
-        return 2
-    last = max(after, key=lambda item: item[1][3])
-    matched = re.search(r'(\d+)', last[0] or '')
-    seconds = int(matched.group(1)) if matched else 0
-    if seconds and abs(seconds - duration) > 2:
-        log('FAIL 最新语音 %r 与音频 %.1fs 不匹配' % (last[0], duration))
-        return 2
-    log('OK 已发送 %r（音频 %.1fs）' % (last[0], duration))
-    return 0
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
+        if user32.GetForegroundWindow() != hwnd or (
+            not args.trusted and not title_ok(win, args.chat, args.chat_type)
+        ):
+            break
+        if has_new_voice(before, voice_items(win), duration):
+            log('OK 已发送（音频 %.1fs）' % duration)
+            return 0
+        time.sleep(0.25)
+    log('UNCERTAIN 未观察到与本次音频匹配的新语音条')
+    return 3
+
+
+def write_result(path, status):
+    result = Path(path)
+    temporary = result.with_name(result.name + f'.{os.getpid()}.tmp')
+    try:
+        try:
+            request = json.loads(result.read_text(encoding='utf-8')).get('request', '')
+        except (OSError, ValueError):
+            request = ''
+        temporary.write_text(json.dumps({'status': status, 'request': request}), encoding='utf-8')
+        os.replace(temporary, result)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--wav', required=True)
+    ap.add_argument('--chat', required=True)
+    ap.add_argument('--chat-type', choices=('private', 'group'), default='group')
+    ap.add_argument('--result-file')
+    ap.add_argument('--trusted', action='store_true',
+                    help='旧桥接 prepare() 已核验会话时使用')
+    ap.add_argument('--hold-extra', type=float, default=0.5)
+    args = ap.parse_args()
+    if args.result_file and args.trusted:
+        ap.error('本地插件发送必须核验目标会话')
+
+    # 同一桌面只允许一个翻唱发送器持有录音热键，进程退出后由 Windows 释放。
+    mutex = kernel32.CreateMutexW(None, 0, 'Local\\BreezeblueSingVoice')
+    acquired = bool(mutex and kernel32.WaitForSingleObject(mutex, 0) in (0, 0x80))
+    attempt = {'recording': False}
+    code = 2
+    try:
+        if acquired and (not args.result_file or account_ready()):
+            code = send(args, attempt)
+        else:
+            log('FAIL 语音发送器繁忙或微信绑定账号未核验')
+    except Exception:
+        code = 3 if attempt['recording'] else 2
+        log('UNCERTAIN 录音后异常' if code == 3 else 'FAIL 录音前异常')
+    finally:
+        if acquired:
+            kernel32.ReleaseMutex(mutex)
+        if mutex:
+            kernel32.CloseHandle(mutex)
+        if args.result_file:
+            write_result(args.result_file, {0: 'sent', 2: 'failed', 3: 'uncertain'}[code])
+    return code
 
 
 if __name__ == '__main__':

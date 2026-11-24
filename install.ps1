@@ -351,78 +351,109 @@ $steps = @(
       Write-Info 'VB-CABLE 已安装；需要重启后把播放设备设为 CABLE Input、微信麦克风设为 CABLE Output'
     } },
   @{ Id = 'plugin'; Name = '安装插件'; Action = {
+      $ErrorActionPreference = 'Stop'
       $wg = Find-WhaleGirl
       if (-not $wg) { throw '未找到鲸鲸安装目录' }
       $plugins = Join-Path $wg 'data\plugins'
       New-Item -ItemType Directory -Force -Path $plugins | Out-Null
-      $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+      $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
       $backup = Join-Path $wg ('data\backup-sing-installer-' + $stamp)
-      New-Item -ItemType Directory -Force -Path $backup | Out-Null
-      foreach ($name in @('config.json')) {
-        $file = Join-Path (Join-Path $wg 'data') $name
-        if (Test-Path $file) { Copy-Item $file (Join-Path $backup $name) -Force }
-      }
-      Get-ChildItem $plugins -Filter 'breezeblue-sing*' -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName (Join-Path $backup $_.Name) -Force
-      }
-      $src = Join-Path $PSScriptRoot 'payload\plugin\plugin.js'
-      if (-not (Test-Path $src)) { throw '缺少插件源码 payload\plugin\plugin.js' }
+      $pkg = Join-Path $PSScriptRoot 'payload\plugin'
+      $manifestPath = Join-Path $pkg 'plugin.json'
+      $sourcePath = Join-Path $pkg 'plugin.js'
+      $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($manifest.Id -ne 'breezeblue-sing' -or $manifest.Api -ne 4) { throw '插件清单无效' }
+      $utf8 = [System.Text.UTF8Encoding]::new($false)
       $flow = [ordered]@{
-        id = 'breezeblue-sing'; api = 4; kind = 'message'
-        hooks = @('chat.pre_reply', 'timer.tick')
-        permissions = @('system.full')
-        executionTimeoutMs = 20000; intervalSeconds = 10
-        javascript = [System.IO.File]::ReadAllText($src, (New-Object System.Text.UTF8Encoding($false)))
+        id = $manifest.Id; api = $manifest.Api; kind = $manifest.Kind
+        hooks = @($manifest.Hooks); permissions = @($manifest.Permissions)
+        executionTimeoutMs = $manifest.ExecutionTimeoutMs; intervalSeconds = $manifest.IntervalSeconds
+        javascript = [System.IO.File]::ReadAllText($sourcePath, $utf8)
       }
-      $flowPath = Join-Path $plugins 'breezeblue-sing.flow.json'
-      $flowBytes = [System.Text.Encoding]::UTF8.GetBytes(($flow | ConvertTo-Json -Depth 6 -Compress))
-      [System.IO.File]::WriteAllBytes($flowPath, $flowBytes)
-      $hash = (Get-FileHash $flowPath -Algorithm SHA256).Hash.ToLower()
+      $flowBytes = $utf8.GetBytes(($flow | ConvertTo-Json -Depth 6 -Compress))
+      $sha = [System.Security.Cryptography.SHA256]::Create()
+      try { $hash = [BitConverter]::ToString($sha.ComputeHash($flowBytes)).Replace('-', '').ToLowerInvariant() }
+      finally { $sha.Dispose() }
+      $grantPath = Join-Path $plugins 'breezeblue-sing.flow-grant.json'
       $settings = [ordered]@{
         coverCli = (Join-Path $Root 'tools\cover.mjs')
         python = (Join-Path $Root 'engine\venv\Scripts\python.exe')
         ffmpeg = (Join-Path $Root 'tools\ffmpeg')
         dataDir = (Join-Path $Root 'data')
-        engine = 'seedvc'
-        maxSeconds = 30
-        onlyGroup = $false
-        autoRender = $true
+        engine = 'seedvc'; maxSeconds = 30; onlyGroup = $false; autoRender = $true
         neteaseCookies = (Join-Path $Root 'cookies.txt')
         voicePython = (Join-Path $Root 'voice\venv\Scripts\python.exe')
         voiceSender = (Join-Path $Root 'voice\send_cover.py')
-        proactiveEnabled = $true
-        proactiveIdleMinutes = 120
-        proactiveDailyMax = 2
-        proactiveQuietStart = '22:30'
-        proactiveQuietEnd = '09:00'
-        proactiveCooldownMinutes = 360
-        allowDownload = $true
-        downloadCandidates = @('晴天', '后来', '小幸运')
       }
-      $grant = [ordered]@{ enabled = $true; fullAccess = $true; hash = $hash; settings = $settings }
-      [System.IO.File]::WriteAllText((Join-Path $plugins 'breezeblue-sing.flow-grant.json'),
-        ($grant | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
-      [System.IO.File]::WriteAllText((Join-Path $plugins 'breezeblue-sing.enabled'), '',
-        (New-Object System.Text.UTF8Encoding($false)))
-      # 同时放一份市场同款 ZIP：鲸鲸「已安装」列表按 ZIP 展示卡片，缺它会看不到插件
+      if (Test-Path -LiteralPath $grantPath -PathType Leaf) {
+        $prior = Get-Content -LiteralPath $grantPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($prior.settings) {
+          foreach ($entry in $prior.settings.PSObject.Properties) { $settings[$entry.Name] = $entry.Value }
+        }
+      }
+      $grant = [ordered]@{ enabled = $false; fullAccess = $false; hash = $hash; settings = $settings }
+      $enabledPath = Join-Path $plugins 'breezeblue-sing.enabled'
+      $writer = @(
+        @{ Target = (Join-Path $plugins 'breezeblue-sing.flow.json'); Backup = 'breezeblue-sing.flow.json'; Bytes = $flowBytes },
+        @{ Target = $grantPath; Backup = 'breezeblue-sing.flow-grant.json'; Bytes = $utf8.GetBytes(($grant | ConvertTo-Json -Depth 16 -Compress)) },
+        @{ Target = (Join-Path $plugins 'breezeblue-sing.zip'); Backup = 'breezeblue-sing.zip' },
+        @{ Target = (Join-Path $Root 'voice\send_cover.py'); Backup = 'runtime-send_cover.py'; Source = (Join-Path $PSScriptRoot 'payload\voice\send_cover.py') },
+        @{ Target = (Join-Path $Root 'tools\cover.mjs'); Backup = 'runtime-cover.mjs'; Source = (Join-Path $PSScriptRoot 'payload\tools\cover.mjs') }
+      )
+      New-Item -ItemType Directory -Path $backup -Force | Out-Null
+      foreach ($name in @('breeze-sing', 'breezeblue-sing')) {
+        foreach ($suffix in @('.flow.json', '.flow-grant.json', '.enabled', '.zip')) {
+          $file = Join-Path $plugins ($name + $suffix)
+          if (Test-Path -LiteralPath $file -PathType Leaf) { Copy-Item -LiteralPath $file -Destination $backup }
+        }
+      }
+      foreach ($item in $writer | Where-Object { $_.Source }) {
+        if (-not (Test-Path -LiteralPath $item.Source -PathType Leaf)) { throw '缺少运行时更新文件' }
+        if (Test-Path -LiteralPath $item.Target -PathType Leaf) {
+          Copy-Item -LiteralPath $item.Target -Destination (Join-Path $backup $item.Backup)
+        }
+      }
+      $markerBackup = Join-Path $backup 'breezeblue-sing.enabled'
+      $updated = [System.Collections.Generic.List[object]]::new()
+      $temps = [System.Collections.Generic.List[string]]::new()
       try {
-        $pkgDir = Join-Path $env:TEMP ('breezeblue-sing-pkg-' + $stamp)
-        New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-        Copy-Item (Join-Path $PSScriptRoot 'payload\plugin\plugin.json') (Join-Path $pkgDir 'plugin.json') -Force
-        Copy-Item $src (Join-Path $pkgDir 'plugin.js') -Force
-        Compress-Archive -Path (Join-Path $pkgDir 'plugin.json'),(Join-Path $pkgDir 'plugin.js') -DestinationPath (Join-Path $plugins 'breezeblue-sing.zip') -Force
-        Remove-Item $pkgDir -Recurse -Force -ErrorAction SilentlyContinue
-      } catch { Write-Host ('WARNING: 生成插件 ZIP 失败：' + $_.Exception.Message) -ForegroundColor Yellow }
-      # 开启 JS 插件总闸（只改数据目录 config.json，不改程序）
-      $cfgFile = Join-Path $wg 'data\config.json'
-      if (Test-Path $cfgFile) {
-        $cfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
-        if (-not $cfg.features) { $cfg | Add-Member -NotePropertyName features -NotePropertyValue ([pscustomobject]@{}) }
-        $cfg.features | Add-Member -NotePropertyName javascriptPlugins -NotePropertyValue $true -Force
-        [System.IO.File]::WriteAllText($cfgFile, ($cfg | ConvertTo-Json -Depth 20),
-          (New-Object System.Text.UTF8Encoding($false)))
+        foreach ($item in $writer) {
+          New-Item -ItemType Directory -Path (Split-Path -Parent $item.Target) -Force | Out-Null
+          $temp = $item.Target + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+          $temps.Add($temp)
+          if ($item.Source) { Copy-Item -LiteralPath $item.Source -Destination $temp }
+          elseif ($item.Bytes) { [System.IO.File]::WriteAllBytes($temp, $item.Bytes) }
+          else {
+            $zip = $temp + '.zip'
+            $temps.Add($zip)
+            Compress-Archive -LiteralPath @($manifestPath, $sourcePath) -DestinationPath $zip
+            Move-Item -LiteralPath $zip -Destination $temp
+          }
+          $item.Temp = $temp
+        }
+        if (Test-Path -LiteralPath $enabledPath -PathType Leaf) { Remove-Item -LiteralPath $enabledPath }
+        foreach ($item in $writer) {
+          if (Test-Path -LiteralPath $item.Target -PathType Leaf) {
+            [System.IO.File]::Replace($item.Temp, $item.Target, [System.Management.Automation.Language.NullString]::Value)
+          } else {
+            [System.IO.File]::Move($item.Temp, $item.Target)
+          }
+          $updated.Add($item)
+        }
+      } catch {
+        foreach ($item in $updated) {
+          $original = Join-Path $backup $item.Backup
+          if (Test-Path -LiteralPath $original -PathType Leaf) { Copy-Item -LiteralPath $original -Destination $item.Target -Force }
+          elseif (Test-Path -LiteralPath $item.Target -PathType Leaf) { Remove-Item -LiteralPath $item.Target }
+        }
+        if (Test-Path -LiteralPath $markerBackup -PathType Leaf) { Copy-Item -LiteralPath $markerBackup -Destination $enabledPath -Force }
+        throw
+      } finally {
+        foreach ($temp in $temps) {
+          if (Test-Path -LiteralPath $temp -PathType Leaf) { Remove-Item -LiteralPath $temp -ErrorAction SilentlyContinue }
+        }
       }
-      Write-Info ('插件已安装：' + $plugins + '；备份：' + $backup + '；重启鲸鲸内核后生效')
+      Write-Info ('插件已覆盖，设置已保留；请在插件市场重新授权启用新版。备份：' + $backup)
     } },
   @{ Id = 'reference'; Name = '生成参考音'; Action = {
       $wg = Find-WhaleGirl
@@ -449,13 +480,8 @@ $steps = @(
       }
     } },
   @{ Id = 'songs'; Name = '默认测试歌曲'; Action = {
-      $src = Join-Path $PSScriptRoot 'payload\songs'
-      if (Test-Path $src) {
-        $dst = Join-Path $Root 'data\songs'
-        New-Item -ItemType Directory -Force -Path $dst | Out-Null
-        Copy-Item (Join-Path $src '*') $dst -Force
-        Write-Info ('已放入默认测试歌曲：' + ((Get-ChildItem $dst -File | Select-Object -First 3 -ExpandProperty Name) -join '、'))
-      }
+      New-Item -ItemType Directory -Force -Path (Join-Path $Root 'data\songs') | Out-Null
+      Write-Info '可将自己有权使用的音频放入 data\songs'
     } },
   @{ Id = 'settings'; Name = '设置向导'; Action = {
       $cfgFile = Join-Path $Root 'config.json'
@@ -499,7 +525,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.13' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.14' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
@@ -525,6 +551,7 @@ foreach ($step in $steps) {
     & $step.Action
     if ($step.Id -eq 'env') { }
     Mark-Done $state $step.Id 'ok'
+    $didRun = $true
   } catch {
     Fail ($step.Name + ' 失败：' + $_.Exception.Message)
   }
@@ -535,16 +562,18 @@ $pending = @($steps | Where-Object { -not (Test-Done $state $_.Id) })
 if ($DryRun) {
   Write-Host ''
   Write-Host '检查结束（DryRun：没有下载、没有修改任何文件）。' -ForegroundColor Yellow
+} elseif ($OnlyStep) {
+  if (-not $didRun) { Write-Host '步骤已完成，覆盖升级请加 -ForceSteps。' }
 } elseif ($pending.Count -eq 0 -and -not $didRun) {
   Write-Host ''
   Write-Host '所有步骤均已完成，本次没有修改。' -ForegroundColor Green
   Write-Host '如果你是从旧版升级，请用 -ForceSteps 重新部署新脚本/插件：' -ForegroundColor Yellow
-  Write-Host '  install.cmd -ForceSteps voice,seedvc,plugin' -ForegroundColor Yellow
+  Write-Host '  install.cmd -OnlyStep plugin -ForceSteps plugin' -ForegroundColor Yellow
 } else {
   Write-Host ''
   Write-Host '安装完成！下一步：' -ForegroundColor Green
   Write-Host ' 1) 重启电脑'
   Write-Host ' 2) 声音设置：输出选 CABLE Input，输入选 CABLE Output'
   Write-Host ' 3) 启动鲸鲸，在插件市场启用 Breezeblue 翻唱'
-  Write-Host ' 4) 私聊发：点歌 see you again'
+  Write-Host ' 4) 私聊发：点歌 加入的歌名'
 }

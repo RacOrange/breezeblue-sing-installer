@@ -190,8 +190,10 @@ async function cmdVoice() {
     const body = await res.json();
     const gateway = (body.gateways || []).find(g => g.platform === 'wechat');
     const bridge = gateway && gateway.bridge || {};
-    if (!bridge.online || !bridge.uia) return out({ ok: false, error: '微信桥接未就绪' });
-    return out({ ok: true, account: bridge.account || '', window: bridge.window || '' });
+    if (!bridge.online || !bridge.uia || bridge.accountOk !== true || bridge.accountGuard !== true) {
+      return out({ ok: false, error: '微信桥接或绑定账号未通过核验' });
+    }
+    return out({ ok: true });
   } catch (error) {
     return out({ ok: false, error: '鲸鲸内核不可达：' + error.message });
   }
