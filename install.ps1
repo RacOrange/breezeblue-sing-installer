@@ -456,7 +456,7 @@ $steps = @(
           foreach ($entry in $prior.settings.PSObject.Properties) { $settings[$entry.Name] = $entry.Value }
         }
       }
-      $grant = [ordered]@{ enabled = $false; fullAccess = $false; hash = $hash; settings = $settings }
+      $grant = [ordered]@{ enabled = $false; fullAccess = $false; hash = $hash; capabilities = [ordered]@{ 'memory.write' = $true }; settings = $settings }
       $enabledPath = Join-Path $plugins 'breezeblue-sing.enabled'
       $writer = @(
         @{ Target = (Join-Path $plugins 'breezeblue-sing.flow.json'); Backup = 'breezeblue-sing.flow.json'; Bytes = $flowBytes },
