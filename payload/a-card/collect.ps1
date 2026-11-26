@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$RuntimeRoot = 'D:\whale-cover'
 )
 

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$DryRun,
   [switch]$Yes,
   [string]$Root = (Join-Path $env:USERPROFILE 'whale-cover'),
