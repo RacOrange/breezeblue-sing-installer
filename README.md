@@ -18,12 +18,23 @@
 
 后面是详细说明；第一次装建议完整看一遍第 1–6 节。
 
+## A 卡实验版（DirectML）
+
+本仓库 `a-card/` 提供 AMD Radeon（RX 6000/7000 优先）的 DirectML 兼容补丁，仍在征集实机测试：
+
+- 适用 Windows 10 22H2 / Windows 11 23H2+、Adrenalin 24.9.1+、Python 3.11；
+- 安装器正常装完后，复制 `a-card` 到运行时根目录并运行 `a-card\setup.ps1`；
+- 失败时运行 `a-card\collect.ps1`，把 zip 连同错误现象回报；
+- 目前 demucs 分离仍走 CPU，Seed-VC 换声走 DirectML；不要用纯 CPU 冒充 A 卡加速。
+
+详细说明和测试计划见 [`a-card/README.md`](a-card/README.md)。
+
 ---
 
 ## 1. 安装前确认
 
 - [ ] Windows 10/11 64 位
-- [ ] NVIDIA 显卡（建议 6GB 显存以上）
+- [ ] NVIDIA 显卡（建议 6GB 显存以上）；A 卡实验版见 `a-card/README.md`（DirectML，需实测反馈）
 - [ ] 微信电脑版 **4.2**（当前只保证这个版本）
 - [ ] 鲸鲸 **4.1.2 或更高**，并且能正常启动
 - [ ] 磁盘可用空间 **10GB 以上**（C 盘不够会自动换到空间最大的盘）
