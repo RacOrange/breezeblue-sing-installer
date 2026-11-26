@@ -220,6 +220,14 @@ def convert(vocals, ref, work):
     return files[0]
 
 
+def limit_peak(audio, ceiling_db=-1.0):
+    ceiling = 10.0 ** (float(ceiling_db) / 20.0)
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    if peak > ceiling:
+        audio = audio * (ceiling / peak)
+    return audio
+
+
 def mix(vocal, inst, work):
     log('混音与母带')
     v, sr = sf.read(vocal, always_2d=False)
@@ -242,6 +250,9 @@ def master_audio(mixed, sr, work):
     run([FFMPEG, '-y', '-hide_banner', '-loglevel', 'error', '-i', raw,
          '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-ar', '44100', '-ac', '1', out],
         work, os.path.join(work, 'ffmpeg.log'), timeout=600)
+    audio, rate = sf.read(out, dtype='float32', always_2d=True)
+    audio = limit_peak(audio)
+    sf.write(out, audio, rate, subtype='PCM_16')
     return out
 
 
@@ -320,7 +331,7 @@ def render_full(source, ref, work):
         mixed[:fade] *= ramp
         mixed[-fade:] *= ramp[::-1]
     cover = master_audio(mixed, rate, work)
-    mastered = fit_timeline(mono_audio(cover, rate), frames, rate)
+    mastered = limit_peak(fit_timeline(mono_audio(cover, rate), frames, rate))
     sf.write(cover, mastered, rate, subtype='PCM_16')
     bounds = phrase_boundaries(boundary_track, rate)
     parts = []
@@ -429,7 +440,8 @@ def main():
             else:
                 y[:fade_n] *= ramp
                 y[-fade_n:] *= ramp[::-1]
-            sf.write(cover, y, sr)
+        y = limit_peak(y)
+        sf.write(cover, y, sr)
         duration = round(len(y) / sr, 2)
     current = read_json(order_path, {})
     if current.get('status') == 'canceled':

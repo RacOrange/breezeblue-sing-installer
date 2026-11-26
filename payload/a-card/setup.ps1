@@ -37,6 +37,17 @@ if ($LASTEXITCODE -ne 0) { Write-Warning 'torchaudio CPU 轮子安装失败；�
 
 Copy-Item -LiteralPath (Join-Path $patchDir 'render_cover.py') -Destination $render -Force
 Copy-Item -LiteralPath (Join-Path $patchDir 'inference_local.py') -Destination $infer -Force
+$moduleSource = Join-Path $patchDir 'seed-vc\modules'
+$moduleTarget = Join-Path $root 'seed-vc\modules'
+if (Test-Path -LiteralPath $moduleSource) {
+  New-Item -ItemType Directory -Force -Path $moduleTarget | Out-Null
+  Get-ChildItem -LiteralPath $moduleSource -File -Filter '*.py' | ForEach-Object {
+    $target = Join-Path $moduleTarget $_.Name
+    if (Test-Path -LiteralPath $target) { Copy-Item -LiteralPath $target -Destination (Join-Path $backup ('module-' + $_.Name)) -Force }
+    Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+  }
+  Write-Host '已应用 seed-vc DirectML 模块补丁。'
+}
 Write-Host '已应用 A 卡兼容补丁。'
 
 $diag = Join-Path $root 'data\logs'

@@ -4,8 +4,8 @@
 
 适用目标：
 
-- Radeon RX 6600 / 6650 XT / 6700 XT / 6750 XT / 6800 XT / 7600 / 7700 XT / 7800 XT 优先（RDNA2 / RDNA3）；\n- 其他支持 DirectX 12 的 AMD Radeon 也可试；
-- Windows 10 22H2 / Windows 11 23H2+ 64 位；
+- Radeon RX 6000 / 7000 系列（RDNA2 / RDNA3）优先；
+- Windows 10 21H2+ / Windows 11 64 位；
 - AMD Adrenalin 24.9.1 或更新驱动；
 - Python 3.11；
 - 至少 16GB 显存/内存建议，8GB 显卡可能因模型较大而退避。
@@ -57,3 +57,14 @@ powershell -ExecutionPolicy Bypass -File .\a-card\diagnose.ps1 -RuntimeRoot "D:\
 - CUDA 环境继续走原路径；
 - 无 CUDA 但 `torch-directml` 可用 → `dml`；
 - 两者都没有 → 明确报 `A_GPU_BACKEND_UNAVAILABLE`，不再静默降级 CPU。
+
+## 实测反馈（RX 7800 XT）
+
+- Windows 11 + RX 7800 XT / gfx1101，Python 3.11；
+- `torch==2.4.1+cpu`、`torch-directml==0.2.5.dev240914`；
+- 单步约 0.4 秒，10 秒片段约 50 秒；
+- 关键死锁：`DiT.forward` 的 `sequence_mask` 会触发设备到主机同步，已在 `seed-vc/modules/diffusion_transformer.py` 改为显式 mask；
+- flow matching 已禁用 `torch.inference_mode()`、改为非原地拼接；
+- mel/stft、RMVPE、Kaldi fbank、F0 量化、BigVGAN 在 DML 下走 CPU；
+- 输出落盘做了 -1 dBFS 峰值保护；
+- 连续跑两首建议间隔几秒，避免显存未回收 OOM。

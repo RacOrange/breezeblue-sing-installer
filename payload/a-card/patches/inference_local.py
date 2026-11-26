@@ -99,7 +99,8 @@ def load_models(args):
         from modules.rmvpe import RMVPE
 
         model_path = load_custom_model_from_hf("lj1995/VoiceConversionWebUI", "rmvpe.pt", None)
-        f0_extractor = RMVPE(model_path, is_half=False, device=device)
+        f0_extractor = RMVPE(model_path, is_half=False,
+                            device=torch.device('cpu') if IS_DML else device)
         f0_fn = f0_extractor.infer_from_audio
     print('stage f0 done', flush=True)
 
@@ -147,7 +148,7 @@ def load_models(args):
         bigvgan_model = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=False)
         # remove weight norm in the model and set to eval mode
         bigvgan_model.remove_weight_norm()
-        bigvgan_model = bigvgan_model.eval().to(device)
+        bigvgan_model = bigvgan_model.eval().to(torch.device('cpu') if IS_DML else device)
         print('stage bigvgan done', flush=True)
         vocoder_fn = bigvgan_model
     elif vocoder_type == 'hifigan':
@@ -276,7 +277,7 @@ def load_models(args):
     }
     from modules.audio import mel_spectrogram
 
-    to_mel = lambda x: mel_spectrogram(x, **mel_fn_args)
+    to_mel = (lambda x: mel_spectrogram(x.cpu(), **mel_fn_args).to(device)) if IS_DML else (lambda x: mel_spectrogram(x, **mel_fn_args))
 
     return (
         model,
@@ -366,19 +367,25 @@ def main(args):
     target_lengths = torch.LongTensor([int(mel.size(2) * length_adjust)]).to(mel.device)
     target2_lengths = torch.LongTensor([mel2.size(2)]).to(mel2.device)
 
-    feat2 = torchaudio.compliance.kaldi.fbank(ori_waves_16k,
+    # DirectML: Kaldi fbank runs on CPU first.
+    feat2 = torchaudio.compliance.kaldi.fbank(ori_waves_16k.cpu() if IS_DML else ori_waves_16k,
                                               num_mel_bins=80,
                                               dither=0,
                                               sample_frequency=16000)
     feat2 = feat2 - feat2.mean(dim=0, keepdim=True)
+    if IS_DML:
+        feat2 = feat2.to(device)
     style2 = campplus_model(feat2.unsqueeze(0))
 
     if f0_condition:
         F0_ori = f0_fn(ori_waves_16k[0], thred=0.03)
         F0_alt = f0_fn(converted_waves_16k[0], thred=0.03)
 
-        F0_ori = torch.from_numpy(F0_ori).to(device)[None]
-        F0_alt = torch.from_numpy(F0_alt).to(device)[None]
+        F0_ori = torch.from_numpy(F0_ori)[None]
+        F0_alt = torch.from_numpy(F0_alt)[None]
+        if not IS_DML:
+            F0_ori = F0_ori.to(device)
+            F0_alt = F0_alt.to(device)
 
         voiced_F0_ori = F0_ori[F0_ori > 1]
         voiced_F0_alt = F0_alt[F0_alt > 1]
@@ -396,6 +403,10 @@ def main(args):
         shifted_f0_alt = torch.exp(shifted_log_f0_alt)
         if pitch_shift != 0:
             shifted_f0_alt[F0_alt > 1] = adjust_f0_semitones(shifted_f0_alt[F0_alt > 1], pitch_shift)
+        if IS_DML:
+            # F0 quantization/log/median run on CPU; move the final tensors to the DML device.
+            F0_ori = F0_ori.to(device)
+            shifted_f0_alt = shifted_f0_alt.to(device)
     else:
         F0_ori = None
         F0_alt = None
@@ -428,7 +439,7 @@ def main(args):
                                                        mel2, style2, None, diffusion_steps,
                                                        inference_cfg_rate=inference_cfg_rate)
             vc_target = vc_target[:, :, mel2.size(-1):]
-        vc_wave = vocoder_fn(vc_target.float()).squeeze()
+        vc_wave = vocoder_fn((vc_target.float().cpu() if IS_DML else vc_target.float())).squeeze()
         vc_wave = vc_wave[None, :]
         if processed_frames == 0:
             if is_last_chunk:
