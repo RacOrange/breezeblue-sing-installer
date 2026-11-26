@@ -1,8 +1,22 @@
 # Breezeblue 翻唱运行时安装器
 
-安装器 1.0.17 包含插件 1.0.4。已有运行时可执行 install.cmd -OnlyStep plugin -ForceSteps plugin 覆盖插件、CLI、语音发送器、音源准备和整首渲染脚本，保留原设置与模型；随后在插件市场重新确认完整权限。升级会备份新旧插件安装文件。本版不附带测试曲，把有权使用的音频放入 data/songs 即可。
+安装器 1.0.18 包含插件 1.0.4.1。已有运行时可执行 install.cmd -OnlyStep plugin -ForceSteps plugin 覆盖插件、CLI、语音发送器、音源准备和整首渲染脚本，保留原设置与模型；随后在插件市场重新确认完整权限。升级会备份新旧插件安装文件。本版不附带测试曲，把有权使用的音频放入 data/songs 即可。
 
 给**原版鲸鲸 4.1.2+** 安装翻唱功能：普通点歌用 seed-vc 渲染整首，在人声停顿附近切分为多条微信语音。
+
+## A 卡实验版（DirectML）
+
+安装器 1.0.18 开始附带 `a-card/` 实验包。AMD Radeon 用户安装完成后，在运行时根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\a-card\setup.ps1 -RuntimeRoot "<你的运行时目录>"
+```
+
+它会安装 torch-directml 并应用 DirectML 兼容补丁；Seed-VC 换声走 A 卡，demucs 分离仍走 CPU。失败时运行 `a-card\collect.ps1` 回传诊断 zip。
+
+支持的优先测试型号：RX 6600 / 6650 XT / 6700 XT / 6750 XT / 6800 XT / 7600 / 7700 XT / 7800 XT；Windows 10 22H2 / Windows 11 23H2+；Adrenalin 24.9.1+。
+
+详细说明见 `a-card/README.md`。A 卡路径仍需实机反馈，不保证所有机型一次通过。
 
 > 最新安装包：[下载最新安装包](https://github.com/RacOrange/breezeblue-sing-installer/releases/latest)
 
@@ -24,7 +38,7 @@
 ## 1. 安装前确认
 
 - [ ] Windows 10/11 64 位
-- [ ] NVIDIA 显卡（建议 6GB 显存以上）
+- [ ] NVIDIA 显卡（建议 6GB 显存以上）；A 卡实验版安装后运行 `a-card\setup.ps1`（DirectML，需实测反馈）
 - [ ] 微信电脑版 **4.2**（当前只保证这个版本）
 - [ ] 鲸鲸 **4.1.2 或更高**，并且能正常启动
 - [ ] 磁盘可用空间 **10GB 以上**（C 盘不够会自动换到空间最大的盘）

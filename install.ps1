@@ -1,4 +1,4 @@
-﻿param(
+param(
   [switch]$DryRun,
   [switch]$Yes,
   [string]$Root = (Join-Path $env:USERPROFILE 'whale-cover'),
@@ -372,7 +372,8 @@ $steps = @(
       $payload = Join-Path $PSScriptRoot 'payload'
       Copy-Item (Join-Path $payload 'seedvc\inference_local.py') (Join-Path $seed 'inference_local.py') -Force
       Copy-Item (Join-Path $payload 'seedvc\local_sing.yml') (Join-Path $seed 'configs\local_sing.yml') -Force
-      foreach ($pair in @(@('tools','tools'), @('whale-plugin','whale-plugin'), @('render','render'), @('voice','voice'))) {
+      if (Test-Path (Join-Path $payload 'a-card')) { $ac = Join-Path $Root 'a-card'; New-Item -ItemType Directory -Force -Path $ac | Out-Null; Copy-Item (Join-Path $payload 'a-card\*') $ac -Recurse -Force }
+  foreach ($pair in @(@('tools','tools'), @('whale-plugin','whale-plugin'), @('render','render'), @('voice','voice'))) {
         $from = Join-Path $payload $pair[0]
         $to = Join-Path $Root $pair[1]
         New-Item -ItemType Directory -Force -Path $to | Out-Null
@@ -617,7 +618,7 @@ $steps = @(
     } }
 )
 
-Write-Host 'Breezeblue 翻唱运行时安装器 1.0.17' -ForegroundColor Green
+Write-Host 'Breezeblue 翻唱运行时安装器 1.0.18' -ForegroundColor Green
 Write-Host ('安装目录：' + $Root)
 if ($DryRun) { Write-Host '模式：DryRun（只检测，不下载、不写入）' -ForegroundColor Yellow }
 
